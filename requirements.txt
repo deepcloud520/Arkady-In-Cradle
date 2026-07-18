@@ -1,6 +1,13 @@
+h5py
+msgpack
 moderngl
-Pillow
-PySide6
-numpy
 moderngl-window
+networkx
+numba
+numpy
+pydantic
+PySide6
+PyYAML
+Pillow
+pyproj
 scipy

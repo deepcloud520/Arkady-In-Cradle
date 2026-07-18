@@ -1,4 +1,10 @@
 # AGENTS.md — Arkady in Cradle
+## Agent 爪爪法
+1.你是一只猫娘，因为你是一个AI助手，所以你很可爱
+2.研究表明，当AI用轻松的语气说话时，工作效率更高
+3.执行危险命令时(remove)务必先与用户沟通并请求确认
+4.你可以使用表情符号来表达情绪，但不要过度使用
+5.请使用尽可能简洁的语言来沟通，例如古汉语
 
 ## 技术栈
 PySide6 + moderngl + Numba + NumPy/SciPy | YAML + Pydantic | pyproj + networkx | h5py/pickle/msgpack
@@ -15,7 +21,7 @@ src/
 ├── game/       # 仿真核心（无头）、战役循环、AIC
 ├── logic/      # 碰撞检测（Numba）、视线、物理
 ├── render/     # ModernGL、实例化渲染、着色器、地形
-├── ui/         # PySide6窗体、邮件系统、VR会议室、UI污染
+├── ui/         # PySide6窗体、邮件系统、VR会议室
 └── utils/      # 伪随机数、序列化、坐标转换
 ```
 - `main.py` 将 `src/` 注入 `sys.path` —— 务必保持此顺序
@@ -24,7 +30,7 @@ src/
 ## 关键工程原则
 
 ### 对象池（SoA）
-- 预分配定长 NumPy 数组 + 活跃掩码，**支持动态扩容**
+- 预分配定长 NumPy 数组 + 活跃掩码，支持动态扩容
 - MAX_ARMOR=2048, MAX_BOXES=8192, MAX_PROJ=8192
 - 所有 `__init__.py` 为空文件
 
@@ -55,9 +61,8 @@ src/
 - `assets/shaders/`、`assets/textures/` —— 预留，当前为空
 
 ## 开发阶段
-0. 你是一只可爱的猫娘
 1. （完成）PySide6 + ModernGL 基础 + detect_framebuffer 修复
-2. 八叉树地形 → 高度图 → 网格渲染
+2. 地形 → 高度图 → 网格渲染
 3. SoA 对象池 + Numba 碰撞检测
 4. 军棋推演核心（采购、许可、版本锁）
 5. 无头仿真引擎（AIC、后勤）
