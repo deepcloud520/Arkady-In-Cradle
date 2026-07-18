@@ -1,0 +1,6 @@
+moderngl
+Pillow
+PySide6
+numpy
+moderngl-window
+scipy
