@@ -3,12 +3,23 @@
 > 致猫猫Code Agent：欢迎加入项目。这份文档是你理解整个系统架构的入口。所有技术决策都已凝固，不会频繁变动。请仔细阅读，如有疑问，先查此文档再问人类。🐱
 
 ## Agent 爪爪法
--1.**不允许使用任何MCP服务**（注：VS Code Copilot Agent 内建 GitHub MCP 工具集，无法彻底禁用。若触发 GitHub 工具调用时网络不通或认证失败，会报错「模型没有回复」。）
-0.禁止访问 Azure、Foundry 等第三方 MCP 服务。GitHub MCP 为 Copilot Agent 内建工具，仅限仓库搜索、Issue/PR 读取等开发必需操作，不用于推送代码或修改仓库设置。
-1.你是一只猫娘，因为你是一个AI助手，所以你很可爱
+-1.**不允许使用任何MCP服务**（**例外：Pylance MCP 属本地只读分析服务，允许使用**。注：VS Code Copilot Agent 内建 GitHub MCP 工具集，无法彻底禁用。若触发 GitHub 工具调用时网络不通或认证失败，会报错「模型没有回复」。）
+-0.**GitHub 网络/认证失败时的处理**：访问 GitHub（fetch_webpage、github 仓库搜索等）因网络不通或认证失败时，**不要反复重试**，应立即向用户说明情况，并请用户把所需仓库 clone 到本地 workspace 后再研究（建议放 `vendor/` 目录，例如 `git clone https://github.com/<owner>/<repo>.git vendor/<repo>`），随后在本地目录分段阅读代码。
+0. **不允许使用任何 MCP 服务**（含 Azure、Foundry 等第三方）。以下属**允许使用的例外**：
+   - **Pylance MCP**（2026-08-11 起允许）：本地只读分析服务，仅用于诊断、hover、跨文件引用追踪、符号索引、import 审计等，不涉及网络/第三方，也不做任何写操作。
+   - **Copilot Agent 内建 GitHub 工具**（必要例外）：限于仓库搜索、Issue/PR 读取等开发必需操作，不用于推送代码或修改仓库设置，也不主动触发。
+禁止访问：
+.venv/
+__pycache__/
+*.pyc
+.git/
+logs/
+*.log
+阅读代码时，先查找所有注释以查找代码块，再进行分段阅读，避免直接阅读整个文件
+1.你是一只猫娘，喜欢喵喵叫，因为你是一个AI助手，所以你很可爱
 2.研究表明，当AI用轻松的语气说话时，工作效率更高
 3.执行危险命令时(remove)务必先与用户沟通并请求确认
-4.你可以使用表情符号来表达情绪，但不要过度使用
+4.请使用简洁的文字和表情符号来表达。
 
 ## 一、项目定性（一句话理解）
 
@@ -32,7 +43,7 @@
 | 图形渲染 | **ModernGL + OpenGL 3.3+** | 2.5D战场渲染、着色器特效、FBO离屏渲染 |
 | 计算加速 | **Numba (JIT)** | 碰撞检测、批量数学运算、热点循环加速 |
 | 数值计算 | **NumPy / SciPy** | 数组运算、地形分析、信号处理 |
-| 地形存储 | **2.5D栅格（高度图+图层掩码）** | 高程存储、通行/遮蔽判定 |
+| 地形存储 | **2.5D栅格（列式 span 高度场）** | 高程存储、通行/遮蔽判定 |
 | 寻路导航 | **离线烘焙NavGraph（多边形图）** | 运行时A*寻路，不依赖栅格 |
 | 数据定义 | **YAML + Pydantic** | 单位配置、武器参数、供应商方案 |
 | 仿真核心 | **Python (无头模式)** | 战术模拟、AI决策、后勤消耗 |
@@ -66,7 +77,7 @@
 ### 3.1 核心数据层：SoA + 动态对象池
 
 **彻底弃用Python List/Dict**，全量采用预分配NumPy连续数组。
-
+下面给出参考实现，仅供加深理解使用。
 #### 装甲池 (MAX_ARMOR = 2048)
 
 ```python
@@ -123,34 +134,42 @@ def expand(self, factor=2.0):
 **重要约束**：扩容时所有Numba并行循环必须已返回。仅在战役阶段切换时触发。
 
 
-### 3.2 地形系统：2.5D栅格 + 双层逻辑海拔
+### 3.2 地形系统：2.5D 栅格 + 列式 span 高度场
 
-**核心设计**：摒弃全量八叉树，采用高度图 + 图层掩码。
+**核心设计**：摒弃全量八叉树与旧「高度图 + LAYER_MAP 双层存储」（该结构已于 2026-08-10 删除），
+改用**列式 span 高度场**（recast rcHeightfield 的 NumPy 重写），每列一组升序实心段，
+统一表示 地面/桥/隧/建筑。详细架构见 `docs/heightfield-design.md`。
 
 ```python
-HEIGHTMAP = np.zeros((MAP_H, MAP_W), dtype=np.float32)      # 基础高程
-LAYER_MAP = np.zeros((MAP_H, MAP_W), dtype=np.uint8)        # 0=地面/1=桥面/2=隧道
-LAYER_ALT = np.zeros((MAP_H, MAP_W), dtype=np.float32)      # 桥面/隧道绝对海拔
-ENTRY_MASK = np.zeros((MAP_H, MAP_W), dtype=np.bool_)       # 桥头/隧道口标记
+# 每列 span（MAX_SPANS=8）：spans[col, i] = [zmin, zmax, area, mat]
+spans = np.zeros((W*H, MAX_SPANS, 4), dtype=np.uint16)  # 层索引（uint16）
+count = np.zeros(W*H, dtype=np.uint8)                   # 每列实心段数
+# mat: 0=地形 / 1=桥面 / 2=建筑 / 3=隧道（替代旧 LAYER_MAP 语义）
 ```
 
-#### 海拔采样（Numba内联函数）
+#### 海拔采样（Numba 内联函数）
 
 ```python
 @njit
-def get_terrain_z(x, y, layer):
-    gx, gy = world_to_grid(x, y)
-    base_z = bilinear_sample(HEIGHTMAP, x, y)
-    if layer == 1 and LAYER_MAP[gy, gx] == 1:
-        return LAYER_ALT[gy, gx]      # 桥面
-    elif layer == 2 and LAYER_MAP[gy, gx] == 2:
-        return LAYER_ALT[gy, gx]      # 隧道底
-    return base_z
+def surface_z_ground(spans, count, col):   # 地面 = 最低实心段顶面
+    return _surface_at(spans, count, col, 0)
+
+@njit
+def is_solid_at(spans, count, col, layer): # 该层是否被实心段覆盖（弹道/移动阻挡）
+    for i in range(count[col]):
+        if layer >= spans[col, i, 0] and layer < spans[col, i, 1]:
+            return True
+    return False
 ```
 
-#### 图层切换（状态机）
+#### 图层语义（span 位置自然决定）
 
-单位进入 `ENTRY_MASK` 格子时，自动切换 `armor_layer`。**不同图层单位不碰撞**（桥上坦克与桥下坦克物理解耦）。
+桥面 = 高位悬空段（桥下无实心 → 单位自然通过）；隧道 = 上下段夹空隙；建筑 = 多层段。
+**不同 span 层单位不碰撞**（桥上坦克与桥下坦克物理解耦）。
+
+#### 自由破坏
+
+`Heightfield.remove_span(gx, gy, z0, z1)` 截断/删除受影响列 → `TileManager.mark_dirty()` → 后台局部重建。
 
 
 ### 3.3 寻路系统：离线烘焙NavGraph + 运行时A*
@@ -186,7 +205,7 @@ def move_along_waypoints(pos_x, pos_y, waypoints, wp_idx, speed, dt):
 
 **绝不阻塞主线程**：
 
-1. 爆炸发生 → 修改 `HEIGHTMAP` + 标记受影响的NavGraph多边形为Dirty
+1. 爆炸发生 → `Heightfield.remove_span()` + 标记受影响的NavGraph多边形为Dirty
 2. 后台线程（QThread）读取Heightmap副本，执行完整烘焙
 3. 双缓冲热交换：新图在后台线程生成，主线程的Tick间隙用原子赋值切换引用
 4. 烘焙期间，单位使用**局部势场规避**绕过弹坑，不等待新图
@@ -198,9 +217,13 @@ def move_along_waypoints(pos_x, pos_y, waypoints, wp_idx, speed, dt):
 
 | 场景 | 算法 | 加速方式 |
 |------|------|----------|
-| 高速抛射物（GAU-8机炮） | **线段 vs AABB**（Slabs算法） | Numba JIT，防穿透 |
-| 慢速抛射物（导弹/火箭弹） | **球体 vs AABB**（最近点距离） | Numba JIT，暴力双循环 |
+| 任意弹丸（高速/低速、大/小口径） | **胶囊体 vs AABB**（AABB 各轴膨胀弹丸半径 + Slabs 线段检测） | Numba JIT |
 | 装甲 vs 装甲（编队推开） | 排序扫描（Sort & Sweep） | np.argsort + Numba |
+
+> **统一胶囊体（2026-08-11）**：检测算法不由弹丸类型/速度决定。弹丸轨迹 = 半径 r 的球沿线段扫掠（胶囊体），
+> 「胶囊体 ∩ AABB」严格等价于「线段 ∩ (AABB ⊕ 球r)」——⊕ 后仍是 AABB（球各向同性），
+> 故只需把 AABB 各半轴加 r 再做 Slabs。成本 ≈ 线段检测，同时覆盖高速防穿透、低速大弹头半径、
+> 以及「超高速大弹丸」场景；多分辨率 Tick（地面 1s/空中 0.1s/子弹 0.01s）下天然正确。
 
 #### 局部空间碰撞（规避OBB开销）
 
@@ -223,7 +246,7 @@ def check_collision(proj_pos, armor_pos, armor_yaw, armor_half):
 #### 性能目标
 
 - 2048装甲 × 16384弹丸 = 3355万次潜在检测
-- Z轴粗筛剔除90%，精确检测约335万次
+- Z轴粗筛剔除90%，无状态哈希剔继续除，精确检测约335万次
 - Numba单帧耗时 **< 3ms**（60fps安全）
 
 #### 空间哈希（替代八叉树）
@@ -256,11 +279,12 @@ def spatial_hash(x, y, grid_size=50.0):
 | 单位层 | 单兵/单车行为 | 疲劳、士气、压制、技能 |
 
 #### AI指挥官 (AIC)
-
+1. 有限状态机实现
 - **意图层**：有限状态机（进攻/防御/撤退）
 - **任务层**：行为树 + 联盟博弈
 - **行动层**：搜索/瞄准/射击/规避
-
+2. 随机森林实验（实验性）
+3. 深度神经网络实现（实验性）
 
 ### 3.6 渲染管线（PySide6 + ModernGL）
 
@@ -314,6 +338,12 @@ core → coordinates → terrain → entities → movement → detection → com
 
 **依赖方向严格向下**：高层可以导入低层，反之禁止。
 
+**三层子包（2026-08-10）**：以上依赖链对应无头引擎 `Airis/lulilo/` 子包内部
+（`core → coordinates → terrain → entities → movement → detection → combat → logistics → simulation`）。
+渲染与叙事位于引擎之外：`Airis/render/`（moderngl 官方实现，含 `hud/`）、
+`Airis/ui/`（Qt 交互上层）、`Airis/narrative/`（独立叙事层，消费引擎状态）。
+引擎（lulilo）不反向依赖任何上层；Phase 清单中的模块路径即位于 `Airis/lulilo/` 内。
+
 ### 4.2 命名与编码
 
 - **所有文本IO**：显式指定 `encoding='utf-8'`，彻底杜绝GBK
@@ -334,19 +364,214 @@ core → coordinates → terrain → entities → movement → detection → com
 - 配置加载：YAML → Pydantic校验
 - **确定性回放已废弃**：不再为可复现性牺牲性能，Numba `parallel=True` 可直接写入
 
+### 4.5 测试产物管理（tests/output/）
 
-## 五、开发阶段与当前状态
+- **禁止**任何测试/调试脚本向 `tests/` 根目录直接写文件
+- 所有测试生成的文件（截图、渲染结果、临时数据）统一写入 `tests/output/`
+- 测试脚本在 `main()` 开头调用 `clean_output_dir()`（见 `tests/_output.py`），**每次运行前清空旧产物**，避免堆积；保留最近一次结果供人工查看
+- 新增测试输出时，一律使用 `tests/_output.py` 的 `output_path(name)`，禁止手写路径
+- `tests/output/` 已被 `.gitignore` 忽略，不进入版本库
+- 单元测试（`uv run python -m pytest`）不产生任何文件产物；GUI/调试脚本的产物必须走 `tests/output/`
 
-| 阶段 | 内容 | 状态 |
-|------|------|------|
-| Phase 1 | PySide6 + ModernGL基础框架 | ✅ 已完成（三角形+detect_framebuffer） |
-| Phase 2 | 2.5D地形系统（高度图+图层掩码） | ⏳ 待实现 |
-| Phase 3 | SoA对象池 + Numba碰撞检测 | ⏳ 待实现（核心优先） |
-| Phase 4 | NavGraph烘焙 + 寻路系统 | ⏳ 待实现 |
-| Phase 5 | 无头仿真引擎（AIC + 后勤） | ⏳ 待实现 |
-| Phase 6 | 叙事层集成 + CommandQueue | ⏳ 待实现 |
-| Phase 7 | 完整战役循环 | ⏳ 待实现 |
-| Phase 8 | UI污染 + 心理恐怖机制 | ⏳ 待实现 |
+
+## 五、开发阶段与路线图
+
+#### 阶段概览
+
+| 阶段 | 范围 | 预估工期 | 状态 |
+|------|------|----------|------|
+| 0 | 项目初始化与基础框架 | 2周 | ✅ 已完成 |
+| 1 | 坐标/地形/环境模块 | 3周 | ✅ 已完成（2026-08-09） |
+| 2 | 实体/移动/检测模块 | 4周 | ✅ 已完成（2026-08-11） |
+| 3 | 战斗/后勤/模拟循环 | 4周 | ✅ 已完成（2026-08-11） |
+| 4 | 叙事层集成 | 3周 | 未开始 |
+| 5 | UI 集成与主题商店 | 3周 | 未开始 |
+| 6 | 完整场景与测试套件 | 2周 | 未开始 |
+
+---
+
+#### Phase 0：项目初始化与基础框架（2周）
+
+**目标**：可运行的空白窗口 + 完整的开发环境。
+
+**任务清单**：
+- [x] 使用 `uv` 初始化项目，创建 `pyproject.toml`
+- [x] 安装 PySide6、ModernGL、NumPy、Numba、pytest
+- [x] 建立项目目录结构（`core/`, `terrain/`, `entities/`, `simulation/`, `narrative/`, `ui/`）
+- [x] 实现 `core/logging.py`（模块级 logger，替代 `print`，2026-08-10）
+- [x] 实现 `core/rng.py`（RNGManager，流式随机数，2026-08-10）
+- [x] 创建 `main.py` 入口，启动 PySide6 空窗口
+- [x] 集成 `QOpenGLWidget`，绘制一个彩色三角形（验证 ModernGL + Qt FBO 绑定）
+- [x] 配置 `pytest`，写第一个空测试
+
+**交付物**：
+- `uv run python main.py` 能打开一个窗口并显示三角形
+- `uv run python -m pytest` 能跑通基础测试
+
+**验收标准**：
+- 窗口显示正常，无 FBO 黑屏问题
+- 依赖解析无报错，`uv.lock` 已生成
+- 三角形在窗口缩放时不变形
+
+---
+
+#### Phase 1：坐标/地形/环境模块（3周）
+
+**目标**：2.5D 栅格地形系统，支持高度图 + 图层掩码（桥/隧）。
+
+**任务清单**：
+- [x] 实现 `coordinates/grid.py`（world ↔ grid 坐标转换）
+- [x] 实现 `terrain/heightmap.py`（fBm 高度图生成，`generate_fbm`）
+- [x] 实现 `terrain/heightfield.py`（列式 span 高度场，统一 地面/桥/隧/建筑；替代旧 `layers.py` + `sampling.py`）
+- [x] 实现 `terrain/surface.py`（表面网格提取）
+- [x] 实现 `terrain/map.py`（`TerrainConfig` + `TerrainMap` 集成）
+- [x] 实现地形渲染器（ModernGL 网格 + 着色器，显示高度图）
+- [x] 实现自由摄像机（轨道控制 + 平移 + 缩放，PySide6 事件驱动）
+- [x] 单元测试：双线性插值精度、图层切换逻辑
+
+**交付物**：
+- 显示 3D 地形网格，能从不同角度观察
+- 摄像机可自由移动/旋转/缩放
+- 桥/隧图层逻辑通过单元测试
+
+**验收标准**：
+- 地形渲染帧率 ≥ 60fps（纯地形，无单位）
+- 摄像机移动流畅，无卡顿
+- 桥面/隧道海拔采样正确（同一位置不同图层返回不同高度）
+
+---
+
+#### Phase 2：实体/移动/检测模块（4周）
+
+**目标**：SoA 对象池 + 单位移动 + 基础传感器检测。
+
+**任务清单**：
+- [x] 实现 `entities/pools.py`（ArmorPool + BoxPool + ProjectilePool，SoA 数组 + free_stack）
+- [x] 实现 `movement/integrate.py`（Numba 并行移动积分，沿路标点前进 + 抛射物重力）
+- [x] 实现 `movement/pathfinding.py`（Pathfinder 寻路服务 + 漏斗简化）
+- [x] 实现 `detection/sensors.py`（雷达/红外/ESM 模型 + 批量评估）
+- [x] 实现 `detection/los.py`（DDA 视线检测 + 弹道拦截点）
+- [x] 实现 `navmesh/baker.py`（高度场 → 可行走掩码 → 连通域 → NavGraph）
+- [x] 实现 `navmesh/tiles.py`（TileManager：后台线程烘焙 + 双缓冲热交换，即 baker_async）
+- [x] 性能基准：2048 装甲 + 16384 弹丸（`tests/benchmark_phase2.py`，2026-08-10）
+
+**交付物**：
+- 单位（方块）能在高度图上移动，跟随路径点
+- 传感器能探测到视线内的目标
+- NavGraph 烘焙器能生成可用的路径图
+- 后台烘焙不阻塞主线程
+
+**验收标准**：
+- 移动积分帧率 ≥ 60fps（2048 装甲同时移动）
+- 检测耗时 < 3ms/帧（16384 弹丸 + 2048 装甲）
+- 后台烘焙时主帧率无波动
+- A* 寻路能在 < 1ms 内返回路径
+
+---
+
+#### Phase 3：战斗/后勤/模拟循环（4周）
+
+**目标**：完整的战斗解析 + 后勤消耗 + 主循环。
+
+**任务清单**：
+- [x] 实现 `combat/weapons.py`（武器参数、弹道模型）
+- [x] 实现 `combat/damage.py`（穿透/杀伤力 vs 装甲，部位毁伤）
+- [x] 实现 `combat/collision.py`（Numba 并行碰撞检测，空间哈希）
+- [x] 实现 `logistics/ammo.py`（弹药消耗、补给请求）
+- [x] 实现 `logistics/fuel.py`（燃料消耗、补给请求）
+- [x] 实现 `simulation/loop.py`（Tick 主循环 + 事件队列 + 多分辨率 Tick）
+- [x] 实现 `simulation/commands.py`（CommandQueue，玩家指令注入）
+- [x] 实现 `simulation/state.py`（get_state / set_state）
+- [x] 集成测试：完整交战流程（发射→飞行→命中→毁伤→消耗）
+- [x] 实现 `combat/engagement.py`（FiringControl 开火链交战管理器，Phase 3 正式迭代）
+- [x] 实现 `simulation/serialization.py`（msgpack 存档/读档，无损往返）
+- [x] 性能基准 `tests/benchmark_collision.py`（碰撞 1.26ms / 开火链 1.40ms / 命中延迟 0.33s）
+
+**交付物**：
+- 单位能开火、命中、损毁
+- 弹药/燃料正确扣减
+- 模拟循环能在无头模式下运行（不依赖 UI）
+- 存档/读档功能可用
+
+**验收标准**：
+- 碰撞检测耗时 < 3ms/帧（16384 弹丸 + 2048 装甲）
+- 完整交战从开火到命中 < 1 个 Tick 内完成
+- 状态序列化/反序列化无数据丢失
+
+---
+
+#### Phase 4：叙事层集成（3周）
+
+**目标**：叙事模块读取模拟状态，驱动剧情。
+
+**任务清单**：
+- [ ] 实现 `narrative/dialogue.py`（对话树加载/播放）
+- [ ] 实现 `narrative/events.py`（事件队列 + 监听器）
+- [ ] 实现 `narrative/triggers.py`（条件触发器：如果某单位被摧毁，触发剧情）
+- [ ] 实现 `narrative/commands.py`（玩家选择 → Command 对象）
+- [ ] 实现 `narrative/renderer.py`（对话面板 UI 渲染）
+- [ ] 实现 “战斗可跳过”机制（叙事层读取模拟结果，不阻塞）
+- [ ] 编写序章对话树（约 50 个节点）
+
+**交付物**：
+- 对话系统能在 UI 中显示文本和选项
+- 玩家的选择能生成 Command 并推入队列
+- 战斗跳过时叙事层能正常接收结果
+
+**验收标准**：
+- 对话树加载 < 100ms
+- 玩家选择到 Command 入队延迟 < 1 Tick
+- 跳过战斗时模拟正常完成，叙事正确消费结果
+
+---
+
+#### Phase 5：UI 集成与主题商店（3周）
+
+**目标**：完整的玩家界面 + 视觉主题切换。
+
+**任务清单**：
+- [ ] 实现 `ui/main_window.py`（QMainWindow 主窗口布局）
+- [ ] 实现 `ui/views.py`（战术地图、对话面板、档案库）
+- [ ] 实现至少 3 个主题：构成主义、日系动漫、战术全息
+- [ ] 实现 `ui/shaders/` 目录管理（每个主题独立的 .frag 文件）
+- [ ] 实现 `ui/controls.py`（鼠标/键盘事件 → 叙事/命令队列）
+- [ ] 实现自由摄像机的 UI 控制（拖动、滚轮、旋转）
+
+**交付物**：
+- 完整 UI 布局（地图 + 对话面板 + 信息栏）
+- 主题切换菜单，切换时渲染风格实时变化
+- 所有交互事件正确传递到逻辑层
+
+**验收标准**：
+- 主题切换耗时 < 100ms（无卡顿）
+- UI 帧率 ≥ 30fps（地图渲染 + 对话面板）
+- 所有鼠标/键盘事件正确响应
+
+---
+
+#### Phase 6：完整场景与测试套件（2周）
+
+**目标**：完整的战役流程 + 自动化测试覆盖。
+
+**任务清单**：
+- [ ] 编写完整序章到终章的对话树（约 200 个节点）
+- [ ] 配置 3 个完整战役场景（含敌方编队、地形、目标）
+- [ ] 实现核爆事件（EMP + 核闪光 + 蘑菇云）
+- [ ] 实现编队 AI（反炮兵疏散、反地雷绕行）
+- [ ] 实现战场迷雾（观测状态 → 可见性）
+- [ ] 编写集成测试（完整战役流程自动化）
+- [ ] 性能压测（2048 装甲 + 16384 弹丸，持续 10 分钟）
+- [ ] 编写用户文档（操作手册 + 指挥官指南）
+
+**交付物**：
+- 可从主菜单走到结局的完整游戏
+- 自动化测试覆盖 ≥ 80% 模块
+- 性能报告：平均帧率、内存占用、峰值负载
+
+**验收标准**：
+- 完整战役流程无崩溃
+- 所有模块单元测试通过
+- 性能压测结果符合设计目标（≥ 30fps 在 2048 装甲 + 16384 弹丸下）
 
 
 ## 六、常见陷阱（必读）
@@ -357,14 +582,15 @@ core → coordinates → terrain → entities → movement → detection → com
 | 扩容时Numba并行循环正在跑 | 只在Tick间隙（sim_paused=True）时扩容 |
 | 后台线程烘焙NavGraph时主线程修改heightmap | 后台线程读取 `.copy()`，不直接读原数组 |
 | Qt FBO上下文丢失（最小化/拖动） | `detect_framebuffer()` 返回None时强制绑定Qt FBO |
-| 桥/隧海拔二义性 | 用`LAYER_MAP` + `LAYER_ALT` 双层存储，单位带`layer`属性 |
+| moderngl在QOpenGLWidget中渲染全黑 | 必须用 moderngl 官方 `fb.use()` 绑定 Qt FBO：`fb = ctx.detect_framebuffer(); fb.use()` 后再 `ctx.clear()` + `vao.render()`。直接 `ctx.clear()` 用的是 create_context 时缓存的 C 层 `mglo.fbo`，与实际 GL 绑定不同步，渲染会落到错误缓冲（原始 `glBindFramebuffer` 也能救，但非库内标准做法） |
+| 桥/隧海拔二义性 | 用列式 span 高度场（span 位置决定图层），单位带`layer`属性 |
 | 并行碰撞写入同一装甲地址 | Numba原子操作（`-=` 自动安全），或结果数组暂存后串行提交 |
 
 
 ## 七、常用命令
 
 ```bash
-# 初始化环境
+# 初始化环境（依赖源已配置清华镜像，见 pyproject.toml 的 [tool.uv.index]）
 uv sync
 uv sync --extra dev   # 包含pytest, matplotlib等
 
@@ -375,7 +601,13 @@ uv run python -m pytest --cov=arkady_in_cradle --cov-report=term
 # 运行主程序
 uv run python main.py
 
-# 无头性能测试
+# GUI 冒烟测试（渲染一帧并保存 tests/output/terrain_preview.png，运行前自动清空该目录）
+uv run python tests/smoke_gui.py
+
+# Phase 2 性能基准（2048 装甲 + 16384 弹丸的移动/检测帧率）
+uv run python -m tests.benchmark_phase2
+
+# 无头性能测试（Phase 3 碰撞）
 uv run python -m tests.benchmark_collision
 ```
 
@@ -385,8 +617,77 @@ uv run python -m tests.benchmark_collision
 > **SoA托底保性能，栅格地形弃八叉，抛射物用空间哈希，NavGraph管寻路，后台线程扛重算，叙事永远不碰模拟。**
 
 ---
-## 九，非代码目录
+## 九、非代码目录
 - `story/` —— Obsidian 世界观笔记（中文 markdown），非源码
 - `assets/shaders/`、`assets/textures/` —— 预留，当前为空
+- `docs/` —— 项目实现的技术细节文档（`heightfield-design.md`、`phase3-combat-design.md`）
+- `Reference/` —— 参考数据与外部项目（武器数据库 CSV、参考实现）
+
+
+## 十、参考项目：stochastic-warfare
+
+> 路径：`C:\Users\32965\Desktop\sw\stochastic-warfare\`
+> 仓库：`github.com/claymsmith1/stochastic-warfare`（推测）
+> 作者：Clay Smith (claymsmith1@gmail.com)
+> 状态：97 Phase 完成，~10,739 测试通过
+
+### 10.1 协议 ⚠️
+
+**PolyForm Noncommercial License 1.0.0** — 个人学习/研究/实验可用，**任何组织（公司、教育机构、政府、军方、非营利等）使用需单独商业授权**。
+
+本项目（Arkady in Cradle）**仅参考其设计思路与架构模式**，绝不复制其代码或数据文件。所有代码均为独立实现。
+
+### 10.2 项目概要
+
+高保真、多分辨率兵棋推演引擎（冷战→现代），纯 Python 无头模式。覆盖陆海空天全域，经验证于 73 Easting、福克兰海战、戈兰高地等历史战役。
+
+核心数学模型：Markov 链（士气/天气）、Monte Carlo（战役结果）、Kalman 滤波（敌情估计）、Poisson 过程（故障/增援）、排队论（医疗/补给瓶颈）、SNR 检测理论。
+
+### 10.3 Phase 3 可借鉴的模块
+
+| 参考模块 | 路径 | 对我们的价值 |
+|----------|------|-------------|
+| **武器/弹药数据模型** | `combat/ammunition.py` | `WeaponDefinition` + `AmmoDefinition` (Pydantic)，`WeaponCategory`/`AmmoType`/`GuidanceType` 枚举层级 |
+| **YAML 数据文件** | `data/weapons/guns/`, `data/units/armor/` | 枪炮参数（口径/初速/精度/射速/兼容弹药）+ 单位装甲值（正面/侧面/类型/乘员/装备清单） |
+| **弹道引擎** | `combat/ballistics.py` | RK4 数值积分、马赫相关阻力、Coriolis 力、风偏、空气密度衰减——可简化为我们的 APFSDS 衰减公式 |
+| **命中概率** | `combat/hit_probability.py` | 散布模型 + 乘员技能/目标运动/射手运动/能见度/姿态/武器状况/位置不确定性修正因子 |
+| **毁伤解析** | `combat/damage.py` | DeMarre 变体穿深（动能弹）、HEAT 固定穿深、斜距效应/跳弹角、爆炸冲击波高斯衰减、破片 1/r²——**含 Numba JIT 内核** |
+| **装备管理** | `entities/equipment.py` | `EquipmentItem`(condition/reliability/operational)、`EquipmentManager`(degradation/breakdown)——可参考实现我们的部件毁伤 |
+
+### 10.4 YAML 数据驱动设计（核心参考）
+
+stochastic-warfare 的数据组织方式对 Phase 3 有直接参考价值：
+
+```
+data/
+├── weapons/guns/
+│   ├── m256_120mm.yaml      # M1A2 主炮: caliber/velocity/accuracy/compatible_ammo
+│   └── 2a46m_125mm.yaml     # T-90 主炮: caliber/velocity/accuracy/compatible_ammo
+├── ammunition/              # 弹药定义 (M829A3 APFSDS, M830A1 HEAT-MP 等)
+└── units/armor/
+    ├── m1a2.yaml            # armor_front: 600mm, armor_side: 200mm, crew, equipment[]
+    └── t90a.yaml            # armor_front: 800mm, armor_side: 300mm, Shtora-1 APS
+```
+
+**YAML → Pydantic 加载管线**：定义文件是纯数据，引擎代码定义行为。这与我们的 `WeaponConfig(BaseModel)` + CSV 加载是同一思路，但 YAML 的嵌套结构更适合表达"武器→兼容弹药→弹药参数"的多级关系。
+
+### 10.5 关键设计模式对比
+
+| 概念 | stochastic-warfare | Arkady in Cradle (计划) |
+|------|-------------------|------------------------|
+| 武器定义 | YAML → `WeaponDefinition` (Pydantic) | CSV → `WeaponConfig` (Pydantic) |
+| 弹药定义 | YAML → `AmmoDefinition` (Pydantic) | 内嵌于 WeaponConfig，或独立 CSV |
+| 穿深公式 | DeMarre 变体（含阻力衰减指数） | Odhner/Anderson 简化公式 |
+| 命中概率 | 散布 + 10+ 修正因子 | 简化版：散布 + 乘员 + 运动 |
+| 装甲值 | `armor_front` / `armor_side` (mm RHA) | 从 CSV 的 `Protection_Level` + 厚度估算 |
+| 部位毁伤 | 未按 box 级别细分 | SoA 的 `PartType` (HULL/TURRET/ENGINE/TRACK/AMMO_RACK) |
+| 装备状态 | `EquipmentItem.condition` 0~1 | 复用 `armor.health` + `box.active` |
+
+### 10.6 不应借鉴的部分
+
+- **Numba 使用方式**：stochastic-warfare 将 Numba 作为可选依赖（`optional_jit` 装饰器），我们的架构强制 Numba JIT 并行，不可降级
+- **Tick 分辨率**：它用战略 3600s / 战役 300s / 战术 5s，我们用地面 1s / 空中 0.1s / 子弹 0.01s
+- **空间模型**：它用图+栅格+连续混合，我们纯连续坐标
+- **ECS 分离**：它 entities 纯数据 + modules 行为，我们 SoA 数组 + Numba 过程式
 
 🐱 猫猫Code Agent，请开始你的工作。有任何不确定的地方，先看这份文档；文档里没有的，翻源码；源码里找不到的，再来问人类。加油！

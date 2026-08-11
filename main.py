@@ -1,10 +1,8 @@
 import sys
-import os
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'Airis'))
+from PySide6.QtWidgets import QApplication
 
 from Airis.ui.main_window import MainWindow
-from PySide6.QtWidgets import QApplication
 
 
 def main():

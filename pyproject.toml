@@ -1,0 +1,43 @@
+[project]
+name = "arkady-in-cradle"
+version = "0.1.0"
+description = "《Arkady in Cradle》—— 叙事驱动的战术兵棋推演器"
+readme = "Readme.txt"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "h5py",
+    "msgpack",
+    "moderngl",
+    "moderngl-window",
+    "networkx",
+    "numba",
+    "numpy",
+    "pydantic",
+    "PySide6",
+    "PyYAML",
+    "Pillow",
+    "pyproj",
+    "scipy",
+    "shapely",
+    "scikit-image",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "matplotlib",
+]
+
+[tool.uv]
+# 项目虚拟环境固定放在 .venv/
+
+# 使用清华 PyPI 镜像加速国内下载
+[[tool.uv.index]]
+name = "tsinghua-pypi"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true
+
+[tool.pytest.ini_options]
+# 只收集项目自己的 tests/，避免误收集 vendor 的 moderngl/tests（第三方库自带测试）
+testpaths = ["tests"]

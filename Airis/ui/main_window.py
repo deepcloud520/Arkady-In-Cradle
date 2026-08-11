@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout
 from PySide6.QtCore import Qt
-from render.gl_widget import GLWidget
+from Airis.render.gl_widget import GLWidget
 
 
 class MainWindow(QMainWindow):
