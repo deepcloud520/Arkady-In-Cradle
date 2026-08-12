@@ -4,36 +4,37 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from Airis.lulilo.terrain import TerrainConfig, TerrainMap
+from Airis.lulilo.terrain import TerrainMap
 from Airis.lulilo.coordinates.grid import grid_to_world, world_to_grid
+from tests.terrain_factory import TerrainFactory, TerrainFactoryConfig
 
 # 固定小地图，含一座桥和一段隧道，便于精确断言
 BRIDGE = {"x0": 40, "y0": 20, "x1": 60, "y1": 22}
 TUNNEL = {"x0": 30, "y0": 50, "x1": 70, "y1": 54}
+CFG = TerrainFactoryConfig(
+    width=100,
+    height=100,
+    cell_size=2.0,
+    seed=7,
+    amplitude=8.0,
+    noise_scale=20.0,
+    octaves=3,
+    bridge_lift=2.0,
+    tunnel_alt=-6.0,
+    bridges=[BRIDGE],
+    tunnels=[TUNNEL],
+)
 
 
 @pytest.fixture()
 def terrain() -> TerrainMap:
-    cfg = TerrainConfig(
-        width=100,
-        height=100,
-        cell_size=2.0,
-        seed=7,
-        amplitude=8.0,
-        noise_scale=20.0,
-        octaves=3,
-        bridge_lift=2.0,
-        tunnel_alt=-6.0,
-        bridges=[BRIDGE],
-        tunnels=[TUNNEL],
-    )
-    return TerrainMap(cfg).generate()
+    return TerrainFactory.fbm(CFG)
 
 
 def test_generate_shapes(terrain: TerrainMap) -> None:
     hf = terrain.heightfield
     assert terrain.continuous_ground is not None
-    w, h = terrain.config.width, terrain.config.height
+    w, h = CFG.width, CFG.height
     assert terrain.continuous_ground.shape == (h, w)
     assert hf.width == w and hf.height == h
     assert hf.spans.shape == (w * h, 8, 4)
@@ -48,17 +49,17 @@ def test_bridge_tunnel_spans(terrain: TerrainMap) -> None:
     cg = terrain.continuous_ground
     bx0, by0, bx1, by1 = 40, 20, 60, 22
     bridge_zone_max = float(np.max(cg[by0 : by1 + 1, bx0 : bx1 + 1]))
-    expected_top = bridge_zone_max + terrain.config.bridge_lift
+    expected_top = bridge_zone_max + CFG.bridge_lift
     assert hf.span_count(50, 21) >= 2
     assert hf.surface_z(50, 21, 1) == pytest.approx(expected_top, abs=1.0)
     assert hf.surface_z(50, 21, 1) > hf.surface_z(50, 21, 0)
     # 隧道格：底段 [-50, z_tun) + 2m 空隙 + 顶段 [z_tun+2, z_tun+4)，不合并
     assert hf.span_count(50, 52) == 2
-    assert hf.ground_z(50, 52) == pytest.approx(terrain.config.tunnel_alt)
+    assert hf.ground_z(50, 52) == pytest.approx(CFG.tunnel_alt)
     # 空隙应空心（单位可通行）
-    assert not hf.solid_at(50, 52, terrain.config.tunnel_alt + 1.0)
+    assert not hf.solid_at(50, 52, CFG.tunnel_alt + 1.0)
     # 隧道顶应实心
-    assert hf.solid_at(50, 52, terrain.config.tunnel_alt + 3.0)
+    assert hf.solid_at(50, 52, CFG.tunnel_alt + 3.0)
     # 普通区域只有地面一个 span，无第二层段 → NO_SURFACE(负哨兵)
     assert hf.span_count(5, 5) == 1
     assert hf.surface_z(5, 5, 1) < 0.0
@@ -68,10 +69,10 @@ def test_continuous_ground(terrain: TerrainMap) -> None:
     """连续地表场：形状正确，隧道格被覆盖为隧道底，其余保留 fBm 连续值。"""
     cg = terrain.continuous_ground
     assert cg is not None
-    w, h = terrain.config.width, terrain.config.height
+    w, h = CFG.width, CFG.height
     assert cg.shape == (h, w)
     # 隧道格覆盖为隧道底（TUNNEL = [50:55, 30:71]）
-    assert cg[52, 50] == pytest.approx(terrain.config.tunnel_alt)
+    assert cg[52, 50] == pytest.approx(CFG.tunnel_alt)
     # 非隧道格保留 fBm 连续值
     assert np.isfinite(cg).all()
     assert cg[5, 5] == pytest.approx(terrain.heightfield.ground_z(5, 5), abs=1.0)
@@ -85,7 +86,7 @@ def test_bridge_tunnel_ground_z_consistency(terrain: TerrainMap) -> None:
 
 
 def test_world_grid_roundtrip(terrain: TerrainMap) -> None:
-    cs = terrain.config.cell_size
+    cs = CFG.cell_size
     # 世界坐标 → 栅格 → 栅格中心世界坐标，应落在同格
     for wx, wy in [(13.0, 27.0), (0.0, 0.0), (199.0 * cs, 199.0 * cs)]:
         gx, gy = world_to_grid(wx, wy, cs)

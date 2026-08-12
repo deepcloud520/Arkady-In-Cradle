@@ -1,181 +1,141 @@
-"""2.5D 栅格地形：TerrainConfig + TerrainMap（Heightfield 逻辑 + 连续地表渲染场）。
+"""2.5D 栅格地形：TerrainMap（注入式容器：Heightfield 逻辑 + 连续地表渲染场）。
 
 对应 AGENTS.md 3.2 / 3.6 节。依赖方向：coordinates → terrain → ...（本模块仅依赖
-engine.coordinates 与同包内的 heightmap / heightfield / surface）。
+engine.coordinates 与同包内的 heightfield / surface / surface_mesh / navmesh_builder）。
 
 存储（2026-08-10 清理后）：
 - heightfield：列式 span 高度场 —— 逻辑/碰撞/寻路唯一数据源
-- continuous_ground：连续地表高度场 —— 仅渲染去量化（fBm 原始值，隧道格覆盖）
-不再保留 heightmap / layer_map / layer_alt / entry_mask 旧双层存储。
+- continuous_ground：连续地表高度场 —— 仅渲染去量化（可选；人工编辑地形可缺省，
+  SurfaceExtractor 自动回退 hf 量化层）
+
+2026-08-12：TerrainMap 纯化为注入式容器（构造时传入已建好的 Heightfield）。
+程序化地形生成（fBm + 矩形桥/隧）迁至 terrain/factory.py（TerrainFactory +
+TerrainFactoryConfig，供 UI 测试场景与测试脚本使用）：战役地形为人工编辑，
+generate() 纯属测试用途，不再驻留生产代码。
 """
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 import numpy as np
-from pydantic import BaseModel, Field
 
-from Airis.lulilo.terrain.heightfield import (
-    MAT_BRIDGE,
-    MAT_TERRAIN,
-    MAT_TUNNEL,
-    Heightfield,
-)
-from Airis.lulilo.terrain.heightmap import generate_fbm
-from Airis.lulilo.terrain.surface import SurfaceExtractor
+from Airis.lulilo.terrain.dual_contour import DualContourBuilder
+from Airis.lulilo.terrain.heightfield import Heightfield
+from Airis.lulilo.terrain.navmesh_builder import NavGraph, NavMeshBuilder
+from Airis.lulilo.terrain.surface import SurfaceExtractor, WorldMeshRenderer
 from Airis.lulilo.terrain.surface_mesh import SurfaceMesh, SurfaceMeshBuilder
+from Airis.lulilo.terrain.world_mesh import WorldMesh, WorldMeshBuilder
 
 logger = logging.getLogger(__name__)
 
 
-class TerrainConfig(BaseModel):
-    """地形配置（Pydantic 配置类，可序列化为 YAML）。"""
-
-    width: int = Field(default=400, ge=2, description="栅格宽（格）")
-    height: int = Field(default=400, ge=2, description="栅格高（格）")
-    cell_size: float = Field(default=2.0, gt=0.0, description="单格世界尺寸（m/格）")
-    seed: int = Field(default=42, description="随机种子")
-    amplitude: float = Field(default=10.0, ge=0.0, description="高度图振幅（m）")
-    noise_scale: float = Field(default=18.0, gt=0.0, description="噪声频率尺度（格）")
-    octaves: int = Field(default=4, ge=1, le=8, description="fBm 八度数")
-    max_slope_deg: float = Field(default=30.0, gt=0.0, lt=90.0, description="可行走最大坡度（度）")
-    bridge_lift: float = Field(default=2.0, gt=0.0, description="桥面相对桥区地面最大高度的抬升量（m）")
-    tunnel_alt: float = Field(default=-6.0, description="隧道底绝对海拔（m）")
-    bridges: list[dict[str, Any]] = Field(default_factory=list, description="桥矩形列表（栅格坐标）")
-    tunnels: list[dict[str, Any]] = Field(default_factory=list, description="隧道矩形列表（栅格坐标）")
-
-
 class TerrainMap:
-    """2.5D 栅格地形：高度图 + 图层掩码 + 双层逻辑海拔。"""
+    """3D地形：注入式容器（Heightfield + 可选连续地表）。
 
-    def __init__(self, config: TerrainConfig | None = None) -> None:
-        self.config = config if config is not None else TerrainConfig()
-        cfg = self.config
+    构造：``TerrainMap(heightfield, continuous_ground=None)``。地形数据由外部
+    （战役人工编辑加载 / tests.terrain_factory）构建后注入；本类只负责持有与查询。
+    """
 
-        # === Heightfield 存储（逻辑/碰撞/寻路唯一数据源） ===
-        self.heightfield = Heightfield(
-            width=cfg.width,
-            height=cfg.height,
-            cs=cfg.cell_size,
-            ch=1.0,
-            z_min=-50.0,
-            z_max=200.0,
-        )
-
-        # 连续地面高度场（渲染层去量化用，fBm 原始值；隧道格覆盖为隧道底）
-        self.continuous_ground: np.ndarray | None = None
-        self._z_min: float = 0.0
-        self._z_max: float = 0.0
-        # SurfaceMesh 懒加载（导航/渲染共用，generate 后首次访问时构建）
+    def __init__(
+        self,
+        heightfield: Heightfield,
+        continuous_ground: np.ndarray | None = None,
+        world_mesh_builder: type[WorldMeshBuilder] | None = None,
+    ) -> None:
+        # Heightfield 存储（逻辑/碰撞/寻路唯一数据源）
+        self.heightfield = heightfield
+        # 连续地面高度场（渲染层去量化用，可选；缺省时 SurfaceExtractor 回退量化层）
+        self.continuous_ground = continuous_ground
+        # WorldMesh 构建器（Phase A=WorldMeshBuilder 顶面 / Phase B=DualContourBuilder 完整3D）
+        self._world_mesh_builder = world_mesh_builder or WorldMeshBuilder
+        # SurfaceMesh 懒加载（渲染结构层共用，首次访问时构建）
         self._surface_mesh: SurfaceMesh | None = None
+        # WorldMesh 懒加载（3D 世界模型：z 采样/碰撞精算，首次访问时构建）
+        self._world_mesh: WorldMesh | None = None
+        # 渲染用 WorldMesh（DualContour 完整 3D：顶/底/侧面），懒加载
+        self._render_world_mesh: WorldMesh | None = None
+        # NavGraph 懒加载（导航新管线，首次访问时构建）
+        self._nav_graph: NavGraph | None = None
 
     @property
     def surface_mesh(self) -> SurfaceMesh:
-        """获取 SurfaceMesh（GreedyMesh 面片图），供导航层复用。
+        """获取 SurfaceMesh（GreedyMesh 面片图），仅供渲染层复用。
 
-        generate() 后首次访问时从 Heightfield 构建并缓存。
+        ⚠️ 2026-08-12 导航已切换 nav_graph（NavMeshBuilder 新管线）；
+        SurfaceMesh 仅保留给 surface.py 结构层渲染与旧测试/调试脚本。
+        首次访问时从 Heightfield 构建并缓存。
         """
         if self._surface_mesh is None:
             self._surface_mesh = SurfaceMeshBuilder(self.heightfield).build()
         return self._surface_mesh
 
-    # ------------------------------------------------------------------
-    # 生成
-    # ------------------------------------------------------------------
-    def generate(self) -> "TerrainMap":
-        """生成完整地形：fBm 连续地表 → Heightfield spans（地面/桥面/隧道）。"""
-        cfg = self.config
-        w, h = cfg.width, cfg.height
+    @property
+    def world_mesh(self) -> WorldMesh:
+        """获取 WorldMesh（3D 面片世界模型），供物理/碰撞精算/z 采样使用。
 
-        # 1. 连续地表（fBm 生成，渲染去量化用；逻辑层仍走 Heightfield 量化 span）
-        ground = generate_fbm(
-            w, h, cfg.amplitude, cfg.noise_scale, cfg.octaves, cfg.seed
-        )
-        self.continuous_ground = ground.copy()
+        docs/worldmesh-3d-surface-design.md：Heightfield 管碰撞粗筛，
+        WorldMesh 管世界（z 采样/精算），NavGraph 管寻路。
+        首次访问时从 Heightfield 构建并缓存。
 
-        # 2. 桥/隧道矩形 → 布尔掩码（局部量，不存储）
-        bridge_mask = self._expand_rects(cfg.bridges, w, h)
-        tunnel_mask = self._expand_rects(cfg.tunnels, w, h)
+        构建器：默认 WorldMeshBuilder（Phase A 顶面）；传入
+        world_mesh_builder=DualContourBuilder 启用 Phase B 完整 3D
+        （顶面+底面+侧面）。
+        """
+        if self._world_mesh is None:
+            self._world_mesh = self._world_mesh_builder(
+                self.heightfield, continuous_ground=self.continuous_ground
+            ).build()
+        return self._world_mesh
 
-        # 2.5 隧道格地表覆盖为隧道底（渲染层看到隧道入口）
-        self.continuous_ground[tunnel_mask] = cfg.tunnel_alt
+    @property
+    def nav_graph(self) -> NavGraph:
+        """获取三角形 NavGraph（NavMeshBuilder 新管线），供导航层使用。
 
-        # 3. Heightfield：地面层（所有列）
-        for gy in range(h):
-            for gx in range(w):
-                z_ground = (
-                    cfg.tunnel_alt if tunnel_mask[gy, gx] else float(ground[gy, gx])
-                )
-                self.heightfield.add_span(gx, gy, -50.0, z_ground, mat=MAT_TERRAIN)
+        区域生长 + 三角剖分 + 跨层垂直 portal
+        （docs/navmesh-region-growth-design.md）。
+        首次访问时从 Heightfield 构建并缓存。
+        """
+        if self._nav_graph is None:
+            self._nav_graph = NavMeshBuilder(self.heightfield).build()
+        return self._nav_graph
 
-        # 4. Heightfield：桥面层（桥面顶 = 桥区地面 max + 抬升 → 贴近地面，桥头自然连通）
-        #    2026-08-11：桥不再固定绝对海拔（曾 bridge_alt=14 导致桥面 vs 地面落差
-        #    > max_climb → 桥面导航不可达），改为相对桥区最高地面抬升 bridge_lift。
-        if bridge_mask.any():
-            z_bridge_max_ground = float(ground[bridge_mask].max())
-            z_bridge_top = z_bridge_max_ground + cfg.bridge_lift
-            z_bridge_bot = z_bridge_top - 1.0  # 1m 厚桥面板
-            for gy, gx in np.argwhere(bridge_mask):
-                z_ground = float(ground[int(gy), int(gx)])
-                # 仅当桥底高于地面时才添加悬空桥面（保留桥下通道）
-                if z_bridge_bot > z_ground + 0.5:
-                    self.heightfield.add_span(
-                        int(gx), int(gy), z_bridge_bot, z_bridge_top, mat=MAT_BRIDGE
-                    )
+    @property
+    def render_world_mesh(self) -> WorldMesh:
+        """获取渲染用 WorldMesh（DualContour 完整 3D：顶/底/侧面）。
 
-        # 5. Heightfield：隧道（双层：隧道底 + 隧道顶，留 2m 空隙供单位通行）
-        for gy, gx in np.argwhere(tunnel_mask):
-            z_tun = cfg.tunnel_alt
-            # 隧道顶 span（留 2m 间隙：底段 [-50, z_tun)、顶段 [z_tun+2, z_tun+4)）
-            self.heightfield.add_span(
-                int(gx), int(gy), z_tun + 2.0, z_tun + 4.0, mat=MAT_TUNNEL
-            )
-
-        self._z_min = float(ground.min())
-        self._z_max = float(ground.max())
-        logger.info(
-            "地形生成完成: %dx%d 格, 高度范围 [%.1f, %.1f] m, "
-            "%d 桥面列 / %d 隧道列",
-            w, h, self._z_min, self._z_max,
-            int(bridge_mask.sum()), int(tunnel_mask.sum()),
-        )
-        return self
-
-    @staticmethod
-    def _expand_rects(
-        rects: list[dict[str, Any]], w: int, h: int
-    ) -> np.ndarray:
-        """矩形列表（dict: x0/y0/x1/y1 栅格坐标）→ (h, w) 布尔掩码（局部量）。"""
-        mask = np.zeros((h, w), dtype=np.bool_)
-        for r in rects:
-            x0, y0, x1, y1 = r["x0"], r["y0"], r["x1"], r["y1"]
-            x0, x1 = sorted((x0, x1))
-            y0, y1 = sorted((y0, y1))
-            x0, y0 = max(0, x0), max(0, y0)
-            x1, y1 = min(w - 1, x1), min(h - 1, y1)
-            mask[y0:y1 + 1, x0:x1 + 1] = True
-        return mask
+        Phase D：渲染从完整 3D WorldMesh 提取（桥侧墙/桥底可见），
+        与逻辑层 world_mesh（Phase A 顶面）解耦。懒加载缓存。
+        """
+        if self._render_world_mesh is None:
+            self._render_world_mesh = DualContourBuilder(
+                self.heightfield,
+                continuous_ground=self.continuous_ground,
+                include_ground=False,   # 渲染地面走 continuous_ground（65536 个地面 patch 是纯负担）
+                build_adjacency=False,  # 渲染不寻路，跳过邻接（8s → 毫秒级）
+            ).build()
+        return self._render_world_mesh
 
     # ------------------------------------------------------------------
     # 渲染数据
     # ------------------------------------------------------------------
     def to_render_data(self) -> dict[str, np.ndarray]:
-        """生成渲染网格（使用 Heightfield + SurfaceExtractor）。
+        """生成渲染网格（Phase D：从 WorldMesh 完整 3D 提取）。
 
         返回（渲染层消费）:
             ground_vertices (N, 9) float32 [x, y, z, r, g, b, nx, ny, nz]
             ground_indices  (M,) uint32
             bridge_vertices (N, 9) float32
             bridge_indices  (M,) uint32
-        """
-        extractor = SurfaceExtractor(
-            self.heightfield,
-            ground_z=self.continuous_ground,
-        )
 
-        # 全量提取（合并网格）
-        rd = extractor.extract()
+        地面 = 平滑连续网格（continuous_ground 或 WorldMesh 地面导出）；
+        结构 = WorldMesh 顶/底/侧面（DualContour 完整 3D）。
+        """
+        renderer = WorldMeshRenderer(
+            self.render_world_mesh,
+            self.heightfield,
+            continuous_ground=self.continuous_ground,
+        )
+        rd = renderer.extract()
 
         if len(rd.vertices) == 0:
             return {
@@ -185,12 +145,10 @@ class TerrainMap:
                 "bridge_indices": np.zeros((0,), dtype=np.uint32),
             }
 
-        # 分离地面与结构：按结构顶点起始偏移（SurfaceExtractor 记录）
-        # 2026-08-11：取代旧的 bridge_alt 高度阈值 —— 桥面现贴近地面，
-        # 高度阈值不可靠；改按「顶点是否属于结构面片」判定。
+        # 分离地面与结构：按结构顶点起始偏移
         verts = rd.vertices
         idx = rd.indices.reshape(-1, 3)
-        struct_start = extractor.struct_offset
+        struct_start = renderer.struct_offset
         is_struct_v = np.zeros(len(verts), dtype=bool)
         is_struct_v[struct_start:] = True
         is_bridge_tri = np.all(is_struct_v[idx], axis=1)

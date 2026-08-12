@@ -1,10 +1,15 @@
-"""运行时寻路服务：A* on SurfaceMesh + 漏斗算法平滑。
+"""运行时寻路服务：A* on 三角形 NavGraph + 漏斗算法平滑。
 
-对应 AGENTS.md 3.3 / docs/surface-mesh-unification.md：
-面片邻接图 → A* 面片序列 → SSFA funnel → 路标点。
-SurfaceMesh 替代旧 NavGraph（2026-08-11 统一架构）。
+对应 AGENTS.md 3.3 / docs/navmesh-region-growth-design.md：
+三角形邻接图 → A* 三角形序列 → SSFA funnel → 路标点。
 
-依赖: terrain.surface_mesh.SurfaceMesh（面片图）、movement.nav（A*）、coordinates.grid（坐标转换）。
+新管线（2026-08-12 切换）：GraphPathfinder（NavGraph）+ funnel_graph + navgraph_astar。
+已废弃（兼容别名保留，供旧测试/调试脚本）：
+- _Pathfinder（SurfaceMesh 面片图寻路）
+- _funnel / _collect_portals（SurfaceMesh 版 SSFA）
+
+依赖: terrain.navmesh_builder.NavGraph、terrain.surface_mesh.SurfaceMesh（渲染用）、
+movement.nav（A*）、coordinates.grid（坐标转换）。
 """
 
 from __future__ import annotations
@@ -14,20 +19,21 @@ import logging
 import numpy as np
 
 from Airis.lulilo.coordinates.grid import grid_to_world, world_to_grid
-from Airis.lulilo.movement.nav import patch_astar, patch_centroid_path
+from Airis.lulilo.movement.nav import (
+    navgraph_astar,
+    patch_astar,
+    patch_centroid_path,
+)
+from Airis.lulilo.terrain.navmesh_builder import NavGraph
 from Airis.lulilo.terrain.surface_mesh import SurfaceMesh
 
 logger = logging.getLogger(__name__)
 
 
-class Pathfinder:
-    """寻路服务：持有 SurfaceMesh 引用 + 漏斗算法。
+class _Pathfinder:
+    """[已废弃] 寻路服务：持有 SurfaceMesh 引用 + 漏斗算法。
 
-    用法::
-
-        pf = Pathfinder(surface_mesh, cell_size=10.0)
-        waypoints = pf.find_path((0, 0), (500, 300))
-        # → list[tuple[float, float]]，世界坐标路标点
+    用 GraphPathfinder（NavGraph 新管线）替代（docs/navmesh-region-growth-design.md）。
     """
 
     def __init__(
@@ -71,10 +77,61 @@ class Pathfinder:
             return []
 
         # 漏斗算法平滑（SSFA，消费 portal edges）
-        waypoints = funnel(
+        waypoints = _funnel(
             patch_ids, self._mesh, start, end,
         )
         return waypoints
+
+    def grid_to_world_path(
+        self, gx0: int, gy0: int, gx1: int, gy1: int
+    ) -> list[tuple[float, float]]:
+        """栅格坐标 → 世界坐标路径（便捷方法）。"""
+        sx, sy = grid_to_world(gx0, gy0, self._cell_size)
+        ex, ey = grid_to_world(gx1, gy1, self._cell_size)
+        return self.find_path((sx, sy), (ex, ey))
+
+
+class GraphPathfinder:
+    """基于三角形 NavGraph 的寻路服务（新管线，docs §4）。
+
+    用法::
+
+        gpf = GraphPathfinder(nav_graph, cell_size=10.0)
+        waypoints = gpf.find_path((0, 0), (500, 300))
+        # → list[tuple[float, float]]，世界坐标路标点（含跨层垂直 portal）
+    """
+
+    def __init__(
+        self, graph: NavGraph | None, cell_size: float = 10.0
+    ) -> None:
+        self._graph = graph
+        self._cell_size = float(cell_size)
+
+    # ------------------------------------------------------------------
+    # 公开 API
+    # ------------------------------------------------------------------
+
+    def set_graph(self, graph: NavGraph) -> None:
+        """运行时更新 NavGraph（双缓冲热交换后调用）。"""
+        self._graph = graph
+
+    @property
+    def graph(self) -> NavGraph | None:
+        return self._graph
+
+    def find_path(
+        self, start: tuple[float, float], end: tuple[float, float]
+    ) -> list[tuple[float, float]]:
+        """寻路：世界坐标 → A* 三角形序列 → 漏斗平滑 → 世界坐标路标点。"""
+        if self._graph is None or not self._graph.triangles:
+            logger.warning("NavGraph 未就绪，无法寻路")
+            return []
+
+        tri_ids = navgraph_astar(self._graph, start, end)
+        if not tri_ids:
+            return []
+
+        return funnel_graph(tri_ids, self._graph, start, end)
 
     def grid_to_world_path(
         self, gx0: int, gy0: int, gx1: int, gy1: int
@@ -112,28 +169,42 @@ def _collect_portals(
     patch_ids: list[int],
     mesh: SurfaceMesh,
 ) -> list[tuple[tuple[float, float], tuple[float, float]]]:
-    """收集路径上每条相邻面片对的 portal 边，并标注左右端点。
+    """面片路径 → 左右标注 portal 序列（SurfaceMesh 版）。
 
-    左右按「沿路径前进方向（形心差）」的叉积符号确定：
-        cross(dir, p - mid) > 0 → 左端点；< 0 → 右端点。
-    这样每条 portal 都带明确的 (left, right)，SSFA 才正确。
+    委托 _collect_portals_generic（与图结构解耦）。
 
     Returns:
         [(left, right), ...] 每条 portal 边的左右端点（世界坐标）。
         无共享边的相邻对跳过（退化）。
     """
+    centroids = [mesh.patches[pid].centroid for pid in patch_ids]
+    return _collect_portals_generic(patch_ids, centroids, mesh.portal_edges)
+
+
+def _collect_portals_generic(
+    node_ids: list[int],
+    centroids: list[tuple[float, float]],
+    portal_edges: dict[
+        int, list[tuple[tuple[float, float], tuple[float, float]]]
+    ],
+) -> list[tuple[tuple[float, float], tuple[float, float]]]:
+    """节点路径 → 左右标注 portal 序列（与具体图结构解耦）。
+
+    左右按「沿路径前进方向（形心差）」的叉积符号确定：
+        cross(dir, p - mid) > 0 → 左端点；< 0 → 右端点。
+    退化点 portal (p, p)（跨层垂直 portal）自然标注为 (p, p)。
+    """
     portals: list[tuple[tuple[float, float], tuple[float, float]]] = []
-    for step in range(len(patch_ids) - 1):
-        pid = patch_ids[step]
-        nid = patch_ids[step + 1]
-        edges = mesh.portal_edges.get(pid, [])
+    for step in range(len(node_ids) - 1):
+        pid = node_ids[step]
+        nid = node_ids[step + 1]
+        edges = portal_edges.get(pid, [])
         if not edges:
             continue
         # 取第一条共享边（应恰有一条）
         p1, p2 = edges[0]
         # 路径前进方向（形心差）
-        c1 = mesh.patches[pid].centroid
-        c2 = mesh.patches[nid].centroid
+        c1, c2 = centroids[step], centroids[step + 1]
         dx = float(c2[0] - c1[0])
         dy = float(c2[1] - c1[1])
         # 端点在路径中线上的近似点
@@ -149,13 +220,59 @@ def _collect_portals(
     return portals
 
 
-def funnel(
+def _funnel(
     patch_ids: list[int],
     mesh: SurfaceMesh,
     start: tuple[float, float],
     end: tuple[float, float],
 ) -> list[tuple[float, float]]:
-    """完整 SSFA：把 A* 面片路径平滑为紧凑路标点。
+    """[已废弃] 完整 SSFA：把 A* 面片路径平滑为紧凑路标点（SurfaceMesh 版）。
+
+    用 funnel_graph（NavGraph 版）替代（docs/navmesh-region-growth-design.md）。
+    主体见 _funnel_core（与图结构解耦）；本函数负责收集 portal 与形心序列。
+    """
+    if len(patch_ids) <= 1:
+        # 起点终点在同一面片：直达（两点直线）
+        return [start] if start == end else [start, end]
+
+    portals = _collect_portals(patch_ids, mesh)
+    centroids = [mesh.patches[pid].centroid for pid in patch_ids]
+    return _funnel_core(portals, centroids, start, end)
+
+
+def funnel_graph(
+    tri_ids: list[int],
+    graph: NavGraph,
+    start: tuple[float, float],
+    end: tuple[float, float],
+) -> list[tuple[float, float]]:
+    """完整 SSFA：三角形 NavGraph 版（新管线，含跨层退化点 portal）。
+
+    垂直 portal 为退化点 (p, p) → funnel 收紧时强制经过该点（docs §3.6.3）。
+
+    Args:
+        tri_ids: A* 返回的三角形 ID 序列（navgraph_astar）。
+        graph: NavGraph（portal_edges / triangles.centroid）。
+        start/end: 起终点世界坐标。
+
+    Returns:
+        路标点列表（世界坐标，含起点不含终点）。
+    """
+    if len(tri_ids) <= 1:
+        return [start] if start == end else [start, end]
+
+    centroids = [graph.triangles[tid].centroid for tid in tri_ids]
+    portals = _collect_portals_generic(tri_ids, centroids, graph.portal_edges)
+    return _funnel_core(portals, centroids, start, end)
+
+
+def _funnel_core(
+    portals: list[tuple[tuple[float, float], tuple[float, float]]],
+    centroids: list[tuple[float, float]],
+    start: tuple[float, float],
+    end: tuple[float, float],
+) -> list[tuple[float, float]]:
+    """SSFA 主体（与具体图结构解耦）：portal 序列 → 紧凑路标点。
 
     实现保证**绝对终止**：
     - 每条 portal 边只消费一次（for 循环，非 while），主推进严格单调
@@ -163,21 +280,16 @@ def funnel(
     - 另有 `max_iter` 保险丝兜底（防意外）
 
     Args:
-        patch_ids: A* 返回的面片 ID 序列（patch_astar）。
-        mesh: SurfaceMesh（含 portal_edges / patches.centroid）。
+        portals: 左右标注的 portal 序列。
+        centroids: 节点形心序列（无 portal 时退化备用）。
         start/end: 起终点世界坐标。
 
     Returns:
         路标点列表（世界坐标，含起点不含终点）。
     """
-    if len(patch_ids) <= 1:
-        # 起点终点在同一面片：直达（两点直线）
-        return [start] if start == end else [start, end]
-
-    portals = _collect_portals(patch_ids, mesh)
     if not portals:
         # 退化：无 portal 信息，退回简化（形心路径）
-        return _simplify_path([start] + _centroid_path(patch_ids, mesh) + [end])
+        return _simplify_path([start] + centroids + [end])
 
     waypoints: list[tuple[float, float]] = [start]
 
@@ -240,7 +352,7 @@ def funnel(
     if end != waypoints[-1]:
         waypoints.append(end)
 
-    logger.debug("漏斗平滑：%d 面片 → %d 路标点", len(patch_ids), len(waypoints))
+    logger.debug("漏斗平滑：%d 节点 → %d 路标点", len(centroids), len(waypoints))
     return waypoints
 
 
@@ -291,3 +403,11 @@ def _simplify_path(
         keep = simplified
 
     return [(float(pts[i, 0]), float(pts[i, 1])) for i in keep]
+
+
+# ---------------------------------------------------------------------------
+# 兼容别名（废弃约定：模块内保留，供旧调试脚本/测试）
+# ---------------------------------------------------------------------------
+
+Pathfinder = _Pathfinder
+funnel = _funnel

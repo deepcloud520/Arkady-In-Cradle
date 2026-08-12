@@ -106,6 +106,36 @@ class Heightfield:
     # ------------------------------------------------------------------
     # 加载期：添加实心段（可任意合并，复刻 rcAddSpan 思路）
     # ------------------------------------------------------------------
+    def set_ground_layer(self, z_arr: np.ndarray) -> None:
+        """批量写入地面层：每列一个实心段 [z_min, z)，材质 MAT_TERRAIN。
+
+        等价于对每列调用 ``add_span(gx, gy, self.z_min, z, mat=MAT_TERRAIN)``，
+        但一次向量化填充 spans/count，无 Python 循环 —— 加载期 400×400 地图
+        从 16 万次调用降到 1 次（2026-08-11 性能优化）。
+
+        Args:
+            z_arr: (height, width) 或 (width*height,) 世界高度数组（float 可转）。
+                零尺寸段（z <= z_min）的列会置空（与 add_span 语义一致）。
+        """
+        zs = np.asarray(z_arr, dtype=np.float32).reshape(-1)
+        n_cols = self.width * self.height
+        if zs.size != n_cols:
+            raise ValueError(
+                f"set_ground_layer: 期望 {n_cols} 个值，得到 {zs.size}"
+            )
+        # 与 _to_layer 一致的世界 z → 层索引（round-half-even + clip 到 uint16）
+        layers = np.clip(
+            np.round((zs - self.z_min) / self.ch), 0, 65535
+        ).astype(np.uint16)
+        valid = layers > 0  # 零尺寸段忽略（add_span 同语义）
+        self.spans[:, 0, _ZMIN] = 0
+        self.spans[:, 0, _ZMAX] = layers
+        self.spans[:, 0, _AREA] = 0
+        self.spans[:, 0, _MAT] = MAT_TERRAIN
+        if n_cols > 1 and int(self.count.max()) > 1:
+            self.spans[:, 1:, :] = 0  # 清理多余段（重复 generate 时）
+        self.count[:] = valid.astype(np.uint8)
+
     def add_span(
         self,
         gx: int,

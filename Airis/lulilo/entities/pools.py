@@ -65,6 +65,14 @@ class ArmorPool:
         wp        (N, 8, 2) float32  路径拐点（世界坐标）
         wp_count  (N,)   uint8    拐点数量
         wp_idx    (N,)   uint8    当前目标拐点索引
+        mesh_id   (N,)   int32    所在表面面片 ID（-1=空中/未绑定）
+        pitch     (N,)   float32  俯仰角 (rad，预留悬挂姿态)
+        roll      (N,)   float32  侧倾角 (rad，预留悬挂姿态)
+        suspension(N,)   float32  悬挂压缩量 (m，预留)
+
+    docs/worldmesh-3d-surface-design.md §5：所有单位统一用
+    (mesh_id, x, y, z) 表示世界位置。mesh_id >= 0 时 z 由面片
+    ray_plane_z 派生；-1 为空中单位（z 自由）。
     """
 
     def __init__(self, capacity: int = MAX_ARMOR) -> None:
@@ -81,6 +89,13 @@ class ArmorPool:
         self.wp = np.zeros((self.capacity, 8, 2), dtype=np.float32)
         self.wp_count = np.zeros(self.capacity, dtype=np.uint8)
         self.wp_idx = np.zeros(self.capacity, dtype=np.uint8)
+
+        # 世界模型绑定（WorldMesh）
+        self.mesh_id = np.full(self.capacity, -1, dtype=np.int32)
+        # 悬挂姿态（Phase A 预留，恒为 0；Phase B 后启用四触点解算）
+        self.pitch = np.zeros(self.capacity, dtype=np.float32)
+        self.roll = np.zeros(self.capacity, dtype=np.float32)
+        self.suspension = np.zeros(self.capacity, dtype=np.float32)
 
         # 空闲栈：存储未被占用的索引
         self._free_stack: list[int] = list(range(self.capacity))
@@ -99,8 +114,17 @@ class ArmorPool:
         half_z: float = 1.0,
         yaw: float = 0.0,
         health: float = 100.0,
+        mesh_id: int = -1,
     ) -> int:
         """生成一辆装甲车，返回其池索引。池满则扩容后继续。
+
+        Args:
+            x, y, z: 世界坐标。
+            half_x, half_y, half_z: 碰撞箱半边长。
+            yaw: 朝向角 (rad)。
+            health: 初始血量。
+            mesh_id: 所在表面面片 ID（WorldMesh；-1=空中/未绑定，
+                随后由 z 同步自动定位）。
 
         Returns:
             装甲索引 (0..capacity-1)。
@@ -113,6 +137,10 @@ class ArmorPool:
         self.yaw[idx] = yaw
         self.health[idx] = health
         self.active[idx] = True
+        self.mesh_id[idx] = int(mesh_id)
+        self.pitch[idx] = 0.0
+        self.roll[idx] = 0.0
+        self.suspension[idx] = 0.0
         # 清除残留路径
         self.wp[idx] = 0.0
         self.wp_count[idx] = 0
@@ -177,6 +205,10 @@ class ArmorPool:
         self.wp = _resize(self.wp, (new_cap, 8, 2))
         self.wp_count = _resize(self.wp_count, (new_cap,))
         self.wp_idx = _resize(self.wp_idx, (new_cap,))
+        self.mesh_id = _resize(self.mesh_id, (new_cap,))
+        self.pitch = _resize(self.pitch, (new_cap,))
+        self.roll = _resize(self.roll, (new_cap,))
+        self.suspension = _resize(self.suspension, (new_cap,))
 
         old_cap = self.capacity
         self.capacity = new_cap
@@ -217,6 +249,8 @@ def _sync_boxes_kernel(
         box_pos[i, 0] = armor_pos[p, 0] + lx * cos_y - ly * sin_y
         box_pos[i, 1] = armor_pos[p, 1] + lx * sin_y + ly * cos_y
         box_pos[i, 2] = armor_pos[p, 2] + lz
+        # TODO(WorldMesh §5.6.4)：pitch/roll 非零后需连乘
+        # R_total = Rz(yaw)·Rx(roll)·Ry(pitch)，Phase A 保持 0 故不变。
 
 
 class BoxPool:

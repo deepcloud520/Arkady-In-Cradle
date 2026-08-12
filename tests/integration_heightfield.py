@@ -4,16 +4,15 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
-from Airis.lulilo.terrain.map import TerrainMap, TerrainConfig
-from Airis.lulilo.navmesh.baker import Baker
-from Airis.lulilo.navmesh.tiles import TileManager
+from Airis.lulilo.navmesh._baker import Baker
+from Airis.lulilo.navmesh._tiles import TileManager
+from tests.terrain_factory import TerrainFactory, TerrainFactoryConfig
 
-cfg = TerrainConfig(
+cfg = TerrainFactoryConfig(
     width=40, height=40, cell_size=2.0,
     bridges=[{"x0": 10, "y0": 15, "x1": 30, "y1": 16}],
 )
-tm = TerrainMap(cfg)
-tm.generate()
+tm = TerrainFactory.fbm(cfg)
 hf = tm.heightfield
 
 # 1. Heightfield

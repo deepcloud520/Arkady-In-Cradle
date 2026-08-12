@@ -20,8 +20,14 @@ class OrbitCamera:
         yaw: float = 45.0,
         pitch: float = 35.0,
         fov: float = 50.0,
-        near: float = 0.5,
-        far: float = 20000.0,
+        # 深度精度优化（2026-08-11）：
+        # - near 0.5→3.0：24 位定点深度在 near=0.5/far=20000 下 1500m 处分辨率仅 27cm →
+        #   远处地形 Z-fighting；near=3 后分辨率提升约 30 倍（且 near<相机最近距离 5m 不裁剪）
+        # - far 必须 > zoom 上限 10000（否则相机拉远时整场被 far 裁剪 → 地图消失）
+        #   20000→12000 已足够；32 位深度缓冲下 12000m 处精度仍达 mm 级
+        # 保持标准透视投影 → 景深（DoF）还原线性深度仅需一行公式，最友好
+        near: float = 3.0,
+        far: float = 12000.0,
     ) -> None:
         self.target = glm.vec3(*target)
         self.distance = float(distance)

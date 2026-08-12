@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from Airis.lulilo.navmesh.baker import Baker, NavGraph
+from Airis.lulilo.navmesh._baker import Baker, NavGraph
 from Airis.lulilo.terrain.heightfield import Heightfield
 from Airis.lulilo.terrain.surface import RenderData, SurfaceExtractor
 

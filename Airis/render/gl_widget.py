@@ -19,6 +19,45 @@ from Airis.render.camera import OrbitCamera
 
 logger = logging.getLogger(__name__)
 
+
+def _default_terrain() -> TerrainMap:
+    """默认演示地形：fBm 起伏 + 峡谷长桥 + 2 座普通桥（WorldMesh Phase B/D 展示）。
+
+    可见效果：
+    - 平滑地面（continuous_ground 去量化，无 1m 台阶）
+    - **峡谷长桥**：山体被切开（峡谷）+ 桥墩支撑（现实山间桥梁）
+    - 普通桥的完整 3D（顶面 + 侧面 + 底面）
+    尺寸 256×256 控制 DualContour 构建在演示可接受范围。
+    """
+    from Airis.lulilo.terrain.factory import (
+        CanyonBridgeConfig,
+        TerrainFactory,
+        TerrainFactoryConfig,
+    )
+
+    cfg = TerrainFactoryConfig(
+        width=256,
+        height=256,
+        cell_size=2.0,
+        seed=42,
+        amplitude=10.0,
+        noise_scale=18.0,
+        octaves=4,
+        bridge_lift=2.0,
+        bridges=[
+            {"x0": 60, "y0": 60, "x1": 120, "y1": 63},    # 普通横桥
+            {"x0": 200, "y0": 60, "x1": 203, "y1": 120},  # 普通纵桥
+        ],
+        canyon_bridge=CanyonBridgeConfig(
+            x0=40, y0=128, x1=215, y1=131,   # 长桥 176 格（352m），横跨山体
+            canyon_frac=0.6,                 # 中间 60% 挖成峡谷
+            canyon_depth=14.0,               # 峡谷挖深 14m
+            pier_interval=16,                # 桥墩间隔 16 格（32m）
+            pier_width=2,                    # 桥墩截面 2×2 格（4×4m）
+        ),
+    )
+    return TerrainFactory.fbm(cfg)
+
 VERTEX_SHADER = """
 #version 330 core
 in vec3 in_vert;
@@ -39,17 +78,25 @@ FRAGMENT_SHADER = """
 in vec3 v_color;
 in vec3 v_normal;
 out vec4 frag_color;
-uniform vec3 u_light_dir;    // 世界空间方向光（指向光源）
-uniform vec3 u_light_color;  // 光源颜色
-uniform float u_ambient;     // 环境光强度
+uniform vec3 u_light_dir;       // 世界空间方向光（指向光源）
+uniform vec3 u_light_color;     // 光源颜色
+uniform vec3 u_sky_color;       // 天光色（半球环境光：朝上面）
+uniform vec3 u_ground_color;    // 地光色（半球环境光：朝下面）
+uniform float u_ambient_strength;  // 环境光强度（0~1）
 void main() {
     vec3 n = normalize(v_normal);
-    // 双面：法线朝下时翻转，避免陡坡/背面全黑
-    if (n.z < 0.0) {
+    // 双面：按三角形朝向翻转法线（gl_FrontFacing），背面也正确受光
+    // 2026-08-11：替代 n.z<0（只翻顶面），侧面（nx/ny 法线）背面同样需要
+    if (!gl_FrontFacing) {
         n = -n;
     }
     float diff = max(dot(n, normalize(u_light_dir)), 0.0);
-    vec3 color = v_color * (u_ambient + (1.0 - u_ambient) * diff * u_light_color);
+    // 半球环境光：由法线 Y 分量在「地光 ↔ 天光」间插值，
+    // 朝上面接天空漫射、朝下面接地面反射（2026-08-11 升级，替代灰白常量）
+    float up = clamp(n.y * 0.5 + 0.5, 0.0, 1.0);
+    vec3 ambient = mix(u_ground_color, u_sky_color, up);
+    vec3 color = v_color * (u_ambient_strength * ambient
+                            + (1.0 - u_ambient_strength) * diff * u_light_color);
     frag_color = vec4(color, 1.0);
 }
 """
@@ -58,15 +105,11 @@ void main() {
 class GLWidget(QOpenGLWidget):
     def __init__(self, terrain: TerrainMap | None = None):
         super().__init__()
-        self.terrain = terrain if terrain is not None else TerrainMap().generate()
-        cfg = self.terrain.config
+        self.terrain = terrain if terrain is not None else _default_terrain()
+        hf = self.terrain.heightfield
         self.camera = OrbitCamera(
-            target=(
-                cfg.width * cfg.cell_size * 0.5,
-                cfg.height * cfg.cell_size * 0.5,
-                0.0,
-            ),
-            distance=cfg.width * cfg.cell_size * 1.2,
+            target=(hf.width * hf.cs * 0.5, hf.height * hf.cs * 0.5, 0.0),
+            distance=hf.width * hf.cs * 1.2,
         )
         self._last_pos: tuple[float, float] | None = None
 
@@ -81,7 +124,8 @@ class GLWidget(QOpenGLWidget):
 
     def initializeGL(self):
         try:
-            self.ctx = moderngl.create_context()
+            # require=460：显式请求 OpenGL 4.6 Core（配合 main.py 的 QSurfaceFormat）
+            self.ctx = moderngl.create_context(require=460)
             info = self.ctx.info
             logger.info("OpenGL %s / %s / %s", info.get("GL_VERSION"), info.get("GL_VENDOR"), info.get("GL_RENDERER"))
             self.ctx.enable(moderngl.DEPTH_TEST)
@@ -94,7 +138,10 @@ class GLWidget(QOpenGLWidget):
             # 世界空间方向光（模拟日光）：从上方偏东南照射，与环境光配合
             self.program["u_light_dir"].value = (0.45, -0.60, 0.65)
             self.program["u_light_color"].value = (1.0, 0.97, 0.90)
-            self.program["u_ambient"].value = 0.42
+            # 半球环境光：晴天淡蓝天光 + 泥土/植被地光（朝上面接天光，朝下面接地光）
+            self.program["u_sky_color"].value = (0.55, 0.65, 0.85)
+            self.program["u_ground_color"].value = (0.30, 0.28, 0.22)
+            self.program["u_ambient_strength"].value = 0.42
             self._build_meshes()
         except Exception:
             logger.exception("initializeGL 失败")
@@ -209,10 +256,10 @@ class GLWidget(QOpenGLWidget):
         p = event.position()
         dx = p.x() - self._last_pos[0]
         dy = p.y() - self._last_pos[1]
-        self.camera.orbit(dx, -dy)
+        self.camera.orbit(-dx, dy)
         self._last_pos = (p.x(), p.y())
         self.update()
 
     def wheelEvent(self, event: QWheelEvent) -> None:
-        self.camera.zoom(1.1 if event.angleDelta().y() > 0 else 0.9)
+        self.camera.zoom(0.9 if event.angleDelta().y() > 0 else 1.1)
         self.update()

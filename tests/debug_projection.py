@@ -11,16 +11,16 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 
-from Airis.lulilo.terrain.map import TerrainMap
 from Airis.render.camera import OrbitCamera
+from tests.terrain_factory import TerrainFactory
 
 
 def main() -> None:
-    terrain = TerrainMap().generate()
-    cfg = terrain.config
+    terrain = TerrainFactory.default()
+    hf = terrain.heightfield
     cam = OrbitCamera(
-        target=(cfg.width * cfg.cell_size * 0.5, cfg.height * cfg.cell_size * 0.5, 0.0),
-        distance=cfg.width * cfg.cell_size * 1.2,
+        target=(hf.width * hf.cs * 0.5, hf.height * hf.cs * 0.5, 0.0),
+        distance=hf.width * hf.cs * 1.2,
     )
     mvp = cam.mvp_matrix(1.0)
     mvp_np = np.array(mvp, dtype=np.float32)
