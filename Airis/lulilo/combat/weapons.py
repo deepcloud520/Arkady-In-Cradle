@@ -53,6 +53,9 @@ class AmmoType(IntEnum):
     ⚠️ 升级预留：编号 6~34 已预留给 HE_FRAG/PELE/THERMOBARIC/APCR/APCBC/
     HEAT_MP/AMP/CANISTER/炮射导弹/步兵弹药/防空可编程弹（AHEAD/3P/VT 等）。
     完整规划见 docs/ammunition-expansion-design.md §一。
+
+    Phase 6c 步骤③（docs/phase6-ai-pipeline.md §十一）**激活**部分预留值
+    （用预留值、不重排，旧存档兼容）：HE_FRAG=6 / PELE=7 / APCR=9 / SAPHEI=34。
     """
     APFSDS = 0   # 尾翼稳定脱壳穿甲弹（动能）
     AP = 1       # 普通穿甲弹（动能）
@@ -60,6 +63,10 @@ class AmmoType(IntEnum):
     HE = 3       # 高爆弹
     ATGM = 4     # 反坦克导弹（化学能）
     HESH = 5     # 碎甲弹
+    HE_FRAG = 6  # 高爆破片弹（球形爆破 + 破片锥；Phase 6c 激活，预留值）
+    PELE = 7     # 惰性侵彻体（细锥射流 + 穿后碎裂；Phase 6c 激活，预留值）
+    APCR = 9     # 硬芯穿甲弹（细锥射流，复用 DeMarre；Phase 6c 激活，预留值）
+    SAPHEI = 34  # 半穿甲高爆燃烧弹（细锥射流 + 延迟引爆；Phase 6c 激活，预留值）
     SENSOR_FUZED = 35  # 末敏弹（攻顶，Phase 6b；追加不重排既有值，旧存档兼容）
 
 
@@ -149,6 +156,13 @@ class AmmoConfig(BaseModel):
     # ---- 双模扫描阈值（§2.3/§7.2，抗诱饵：双源都达标才引爆）----
     mmw_threshold: float = 5.0            # 毫米波反射阈值（ArmorPool.rcs）
     ir_threshold: float = 0.1             # 红外辐射阈值（EmitterPool 红外 emitter 的 cur_power，含残热）
+    # ---- Phase 6c 步骤③ 爆炸/破片参数（docs/phase6-ai-pipeline.md §十一.2）----
+    # 全部带默认值，旧 YAML / 旧测试构造无需改动即通过校验（extra=forbid 下一次加齐）
+    blast_radius: float = 0.0             # 爆炸半径 (m)；>0 时命中后提交球形爆破事件（§七.3）
+    blast_dmg: float = 0.0                # 球形爆破中心毁伤量（半径内线性衰减到 0）
+    frag_dmg: float = 0.0                 # 单破片伤害；>0 时提交破片锥事件
+    frag_count: int = 0                   # 破片数（破片锥参数；本阶段确定性结算）
+    fuse_delay: float = 0.0               # 引信延迟 (s)：SAPHEI 穿后延迟引爆（预留，本阶段 0）
 
     model_config = {"extra": "forbid"}
 

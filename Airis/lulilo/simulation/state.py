@@ -36,6 +36,8 @@ class SimulationState:
     box_pool: Any = None
     projectile_pool: Any = None
     emitter_pool: Any = None  # Phase 6b 电磁辐射源池（可选装配）
+    formation_pool: Any = None  # Phase 6c 编队 AI 池（可选装配，docs/phase6-ai-design.md §1.2）
+    damage_pool: Any = None  # Phase 6c 伤害提交池（可选装配，docs/phase6-ai-pipeline.md §七）
 
     ammo: Any = None
     fuel: Any = None
@@ -52,6 +54,8 @@ class SimulationState:
                 "box": self.box_pool,
                 "projectile": self.projectile_pool,
                 "emitter": self.emitter_pool,
+                "formation": self.formation_pool,
+                "damage": self.damage_pool,
             },
             logistics={
                 "ammo": self.ammo,

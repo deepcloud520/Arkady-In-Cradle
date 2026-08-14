@@ -46,6 +46,11 @@ from Airis.lulilo.combat.damage import (
     resolve_behind_armor_single,
     resolve_penetration_single,
 )
+from Airis.lulilo.combat.damage_submission import (
+    DamageKind,
+    DamageSubmissionPool,
+    resolve_area_damage,
+)
 from Airis.lulilo.combat.guidance import (
     GuidanceStage,
     ManualOverride,
@@ -192,6 +197,8 @@ class FiringControl:
         # ---- Phase 6b 步骤 8/9：末敏弹扫描 / 激光制导炸弹 ----
         sfm: SfmScanner | None = None,
         sal: SALSystem | None = None,
+        # ---- Phase 6c 步骤③：爆炸/毁伤提交池（docs/phase6-ai-pipeline.md §七）----
+        damage_pool: DamageSubmissionPool | None = None,
     ) -> None:
         self.armor = armor
         self.boxes = boxes
@@ -215,6 +222,8 @@ class FiringControl:
         # 末敏弹双模扫描（docs §七）与激光制导炸弹（docs §7.5）
         self.sfm = sfm or SfmScanner(self.armor, self.emitters)
         self.sal = sal or SALSystem(self.emitters, self.terrain)
+        # 爆炸/毁伤提交池（Phase 6c 步骤③；SAL 爆破/HE_FRAG 等区域毁伤先提交、Tick 末统一结算）
+        self.damage_pool = damage_pool or DamageSubmissionPool()
 
         # 单位交战配置（armor_idx → UnitCombatConfig）
         self._configs: dict[int, UnitCombatConfig] = {}
@@ -435,12 +444,22 @@ class FiringControl:
         return rec
 
     def _kind_of(self, ammo_id: str) -> int:
-        """弹药 → 抛射物类型（APFSDS/AP 为子弹，HEAT/ATGM 为导弹）。"""
+        """弹药 → 抛射物类型（APFSDS/AP/APCR/PELE 为子弹，HEAT/ATGM/HE_FRAG/SAPHEI 为导弹）。
+
+        Phase 6c 步骤③（docs/phase6-ai-pipeline.md §十一.4）：HE_FRAG/SAPHEI 有爆炸 → MISSILE，
+        APCR/PELE 为动能细锥 → BULLET。
+        """
         from Airis.lulilo.entities.pools import ProjectileType
         from Airis.lulilo.combat.weapons import AmmoType
 
         ammo = self.weapon_system.registry.get_ammo(ammo_id)
-        if ammo.ammo_type in (AmmoType.HEAT, AmmoType.ATGM, AmmoType.HESH):
+        if ammo.ammo_type in (
+            AmmoType.HEAT,
+            AmmoType.ATGM,
+            AmmoType.HESH,
+            AmmoType.HE_FRAG,
+            AmmoType.SAPHEI,
+        ):
             return int(ProjectileType.MISSILE)
         return int(ProjectileType.BULLET)
 
@@ -469,6 +488,9 @@ class FiringControl:
         # 残余不足一个子弹 Tick 的时间并入最后一子步（保证总时长 = dt）
         if acc < dt - 1e-9:
             self._step_sub(dt - acc)
+
+        # Phase 6c 步骤③：Tick 末统一结算伤害提交池（§七.3）
+        self._resolve_damage_pool()
 
     def _step_sub(self, sub_dt: float) -> None:
         """一个子弹子步：阶段切换 → 弹道/制导积分 → 碰撞 → 毁伤 → 回收。"""
@@ -561,10 +583,11 @@ class FiringControl:
             self._resolve_sfm_hit(proj_idx, armor_idx)
 
     def _resolve_sfm_hit(self, proj_idx: int, armor_idx: int) -> None:
-        """末敏弹 EFP 攻顶毁伤（docs §7.3）。
+        """末敏弹 EFP 攻顶毁伤（docs §7.3）——保留直接命中路径。
 
         顶部 = 正面 × top_armor_factor，垂直攻顶（impact_angle_deg=0），
         EFP 固定穿深（is_heat 化学能语义、不随距离衰减）。命中部位 = 最近 box。
+        毁伤核心已抽 `_resolve_top_attack`（docs §五.3），供攻顶 ATGM 共用。
         """
         if not self.armor.active[armor_idx]:
             self._destroy_projectile(proj_idx)
@@ -572,53 +595,69 @@ class FiringControl:
         ammo = self._ammo_of(proj_idx)
         if ammo is None:
             return
-        cfg = self._config_of(armor_idx) if armor_idx in self._configs else None
+        cfg = self._configs.get(armor_idx)
         if cfg is None:
             return
 
-        top_mm = cfg.armor_mm * ammo.top_armor_factor
-        result = self.damage_resolver.resolve(
-            armor_idx=armor_idx,
-            armor_mm=top_mm,
-            impact_angle_deg=0.0,               # 垂直攻顶
-            range_m=0.0,
-            pen_mm_rha=ammo.efp_pen_mm,         # EFP 固定穿深
-            is_heat=True,                       # 爆炸成型，化学能语义
-            drag_coefficient=0.0,               # 穿深不随距离衰减
-            muzzle_velocity=0.0,
-            rng_u=self.rng.uniform(),
+        top_factor = float(ammo.top_armor_factor)
+        result = self._resolve_top_attack(
+            armor_idx, float(ammo.efp_pen_mm), top_factor, cause="sfm"
         )
-
         self.events.emit(
             "sfm_detonate",
             {
                 "proj": proj_idx,
                 "target": armor_idx,
-                "top_mm": top_mm,
+                "top_mm": cfg.armor_mm * top_factor,
                 "efp_pen": ammo.efp_pen_mm,
                 "margin": result["margin"],
                 "penetrated": result["margin"] > 0 and not result["ricochet"],
             },
         )
-
-        if result["ricochet"]:
-            self._destroy_projectile(proj_idx)
-            return
-
-        # 毁伤提交（复用 _resolve_hit 尾部逻辑）
-        health = float(self.armor.health[armor_idx]) - float(result["health_dmg"])
-        self.armor.health[armor_idx] = max(0.0, health)
-
-        if result["margin"] > 0:
-            part = self._resolve_top_part(armor_idx)
-            self._apply_part_damage(armor_idx, part, result["cookoff"])
-
-        if result["cookoff"] or self.armor.health[armor_idx] <= 0.0:
-            self._destroy_armor(
-                armor_idx, cause="sfm" if result["cookoff"] else "health"
-            )
-
         self._destroy_projectile(proj_idx)
+
+    def _resolve_top_attack(
+        self, armor_idx: int, pen_mm: float, top_factor: float, cause: str
+    ) -> dict[str, float | bool]:
+        """攻顶毁伤公共函数（docs §五.3 / §七.3）。
+
+        顶部 = 正面 × top_factor，垂直攻顶（impact_angle_deg=0），固定穿深
+        （is_heat 化学能语义、不随距离衰减）。SFM 直接路径与提交池 CONE 事件
+        共用（步骤④ 攻顶 ATGM 也走此函数）。返回 DamageResolver.resolve 结果。
+        """
+        cfg = self._configs.get(armor_idx)
+        if cfg is None:
+            return {
+                "armor_eff": 0.0,
+                "margin": -1e9,
+                "ricochet": True,
+                "health_dmg": 0.0,
+                "fire": False,
+                "cookoff": False,
+            }
+        top_mm = cfg.armor_mm * top_factor
+        result = self.damage_resolver.resolve(
+            armor_idx=armor_idx,
+            armor_mm=top_mm,
+            impact_angle_deg=0.0,               # 垂直攻顶
+            range_m=0.0,
+            pen_mm_rha=pen_mm,                  # EFP/攻顶 固定穿深
+            is_heat=True,                       # 爆炸成型，化学能语义
+            drag_coefficient=0.0,               # 穿深不随距离衰减
+            muzzle_velocity=0.0,
+            rng_u=self.rng.uniform(),
+        )
+        if not result["ricochet"]:
+            health = float(self.armor.health[armor_idx]) - float(result["health_dmg"])
+            self.armor.health[armor_idx] = max(0.0, health)
+            if result["margin"] > 0:
+                part = self._resolve_top_part(armor_idx)
+                self._apply_part_damage(armor_idx, part, result["cookoff"])
+            if result["cookoff"] or self.armor.health[armor_idx] <= 0.0:
+                self._destroy_armor(
+                    armor_idx, cause=cause if result["cookoff"] else "health"
+                )
+        return result
 
     def _resolve_top_part(self, armor_idx: int) -> int:
         """攻顶命中部位：顶部投影 → 简化取最近 box（docs §7.3 fallback 分支）。"""
@@ -715,21 +754,78 @@ class FiringControl:
             invalidate()
 
     def _sal_blast_damage(self, tx: float, ty: float, tz: float) -> None:
-        """SAL 爆炸近距毁伤：爆炸半径内装甲受线性衰减毁伤（简化）。"""
-        a = self.armor
-        blast_radius = SAL_CRATER_RADIUS * 3.0
-        r2 = blast_radius * blast_radius
-        for j in a.active_indices():
-            dx = a.pos[j, 0] - tx
-            dy = a.pos[j, 1] - ty
-            d2 = dx * dx + dy * dy
-            if d2 > r2:
+        """SAL 爆炸近距毁伤：提交球形爆破事件进提交池（Tick 末统一结算，§七.3）。
+
+        原实现即时遍历装甲线性衰减；现改为提交 `DamageKind.SPHERE` 事件，
+        由 `_resolve_damage_pool` 统一批量结算（Numba 内核原地扣血）+ 补摧毁。
+        """
+        self.damage_pool.submit_damage(
+            DamageKind.SPHERE,
+            (tx, ty, tz),
+            radius=SAL_CRATER_RADIUS * 3.0,
+            pen_mm=SAL_BLAST_DMG,
+        )
+
+    # ------------------------------------------------------------------
+    # 伤害提交池结算（Phase 6c 步骤③，docs/phase6-ai-pipeline.md §七.3）
+    # ------------------------------------------------------------------
+
+    def _resolve_damage_pool(self) -> None:
+        """Tick 末统一结算伤害提交池（§七.3）。
+
+        1. 区域毁伤（球形/破片锥）：Numba 批量内核原地扣 armor.health（O(E×N)）
+        2. 区域毁伤导致的摧毁：Python 补 `_destroy_armor`（内核只扣血）
+        3. 锥形/细锥（直接目标）：逐事件顶级攻顶毁伤（复用 `_resolve_top_attack`）
+        结算后清空事件池（`clear` 归还索引）。
+        """
+        pool = self.damage_pool
+        if pool is None or pool.active_count == 0:
+            return
+
+        # 1. 区域毁伤（球形/破片锥）：Numba 批量结算
+        if pool.active_count > 0:
+            resolve_area_damage(
+                pool.kind,
+                pool.center,
+                pool.radius,
+                pool.pen_mm,
+                pool.direction,
+                pool.cone_angle,
+                pool.frag_count,
+                pool.active,
+                self.armor.pos,
+                self.armor.health,
+                self.armor.active,
+            )
+
+        # 2. 区域毁伤导致的摧毁（Numba 只扣血，Python 补 destroy）
+        self._finalize_area_kills()
+
+        # 3. 锥形/细锥（直接目标）：逐事件顶级攻顶毁伤
+        for ev in pool.active_indices():
+            ev = int(ev)
+            k = int(pool.kind[ev])
+            if k not in (int(DamageKind.CONE), int(DamageKind.FINE_CONE)):
                 continue
-            d = np.sqrt(d2)
-            factor = max(0.0, 1.0 - d / blast_radius)
-            a.health[j] = max(0.0, float(a.health[j]) - SAL_BLAST_DMG * factor)
-            if a.health[j] <= 0.0:
-                self._destroy_armor(int(j), cause="sal_blast")
+            tid = int(pool.target_idx[ev])
+            if not (0 <= tid < self.armor.capacity) or not self.armor.active[tid]:
+                continue
+            tf = float(pool.top_factor[ev])
+            self._resolve_top_attack(
+                tid,
+                float(pool.pen_mm[ev]),
+                tf if tf > 0.0 else 1.0,
+                cause="cone",
+            )
+
+        pool.clear()
+
+    def _finalize_area_kills(self) -> None:
+        """区域毁伤后清理：health<=0 的装甲走既有销毁路径（事件/级联/后勤）。"""
+        a = self.armor
+        low = a.active & (a.health <= 0.0)
+        for idx in np.flatnonzero(low):
+            self._destroy_armor(int(idx), cause="blast")
 
     # ------------------------------------------------------------------
     # 阶段状态机（Phase 6b：guid_stage / guid_override 传给控制回调的输入）
@@ -1118,6 +1214,45 @@ class FiringControl:
 
         if result["cookoff"] or self.armor.health[armor_idx] <= 0.0:
             self._destroy_armor(armor_idx, cause="cookoff" if result["cookoff"] else "health")
+
+        # Phase 6c 步骤③：爆炸/破片弹药（HE_FRAG/SAPHEI 等）→ 提交池（§七.3）
+        # 即使目标被击毁也爆炸（HE 杀伤链：穿透 + 爆破并存）
+        if ammo is not None and ammo.blast_radius > 0.0:
+            self._submit_hit_blast(ammo, hit, proj_idx)
+
+    def _submit_hit_blast(self, ammo: Any, hit: CollisionHit, proj_idx: int) -> None:
+        """命中点爆炸/破片 → 提交池（docs §七.3 / §十一.3）。
+
+        以命中点为球心提交球形爆破事件（线性衰减）；破片（frag_count>0）加提交
+        破片锥事件（方向 = 弹丸飞行方向，半角 30°，射程 = blast_radius）。
+        由 `_resolve_damage_pool` 于 Tick 末统一结算。
+        """
+        cx = float(hit.hit_x)
+        cy = float(hit.hit_y)
+        cz = float(hit.hit_z)
+        if ammo.blast_radius > 0.0 and ammo.blast_dmg > 0.0:
+            self.damage_pool.submit_damage(
+                DamageKind.SPHERE,
+                (cx, cy, cz),
+                radius=float(ammo.blast_radius),
+                pen_mm=float(ammo.blast_dmg),
+            )
+        if ammo.frag_count > 0 and ammo.frag_dmg > 0.0:
+            vel = self.projectiles.vel[proj_idx]
+            vx = float(vel[0])
+            vy = float(vel[1])
+            vz = float(vel[2])
+            vn = float(np.sqrt(vx * vx + vy * vy + vz * vz))
+            if vn > 1e-9:
+                self.damage_pool.submit_damage(
+                    DamageKind.FRAG_CONE,
+                    (cx, cy, cz),
+                    radius=float(ammo.blast_radius),
+                    pen_mm=float(ammo.frag_dmg),
+                    direction=(vx / vn, vy / vn, vz / vn),
+                    cone_angle=float(np.radians(30.0)),
+                    frag_count=int(ammo.frag_count),
+                )
 
     def _apply_part_damage(self, armor_idx: int, part: int, cookoff: bool) -> None:
         """击穿后的部位毁伤（box 失活映射，design doc §5.3）。

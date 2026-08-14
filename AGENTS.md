@@ -389,9 +389,16 @@ core → coordinates → terrain → entities → movement → detection → com
 | 5 | UI 集成与主题商店 | 3周 | 🔄 进行中（5a 管线骨架完成 2026-08-13；5b 面板待办） |
 | 6 | 完整场景与测试套件 | 2周 | 未开始 |
 
-> 📌 **Phase 6b（导弹制导，独立于上表 Phase 6）**：制导律脚本化 + 电子战闭环 + 末敏弹——
-> 制导管线已实施 ✅（2026-08-14，docs/phase6-guidance-pipeline.md 步骤 1~7，全量 346 测试全绿）；
-> 末敏弹扫描（`combat/sfm.py`）与激光制导炸弹（`combat/sal.py`）待实施。
+> 📌 **Phase 6b（导弹制导，独立于上表 Phase 6）**：制导律脚本化 + 电子战闭环 + 末敏弹
+> （`combat/sfm.py`）+ 激光制导炸弹（`combat/sal.py`）**已全部实施** ✅
+> （2026-08-14，docs/phase6-guidance-pipeline.md 步骤 1~9，全量 363 测试全绿）。
+>
+> 📌 **Phase 6c（剩余子系统 AI，独立于上表 Phase 6）**：设计定稿 `docs/phase6-ai-design.md`；
+> 实施级管线 `docs/phase6-ai-pipeline.md`（步骤 ①~⑩）——**步骤 ① SoA 扩展 + ② 编队 AI
+> 指挥链/单位 AI 执行 + ③ 爆炸/毁伤提交池与弹药激活已完成** ✅
+> （2026-08-14，全量 402 测试全绿），**④ 攻顶 ATGM 与 ⑧ 巡飞弹/CAS 延后（不紧急）**，
+> ⑤⑥⑦⑨⑩ 未实施
+> （⑤ 炮兵 → ⑥ 反炮 → ⑦ 射界规避 → ⑨ 通信簇+RWR+诱饵 → ⑩ 测试场景/压测/文档）。
 
 ---
 

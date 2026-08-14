@@ -109,11 +109,12 @@ class SimulationLoop:
         """配置 AGENTS.md 3.5 默认多分辨率 Tick：
         地面 1s / 空中 0.1s / 子弹 0.01s。
 
-        - movement / detection / logistics：地面 Tick（1s）
+        - movement / detection / ai / logistics：地面 Tick（1s）
         - combat：子弹 Tick（0.01s，内部再细分抛射物积分）
         """
         self.set_rate("movement", TICK_GROUND)
         self.set_rate("detection", TICK_GROUND)
+        self.set_rate("ai", TICK_GROUND)          # Phase 6c 编队/单位 AI（docs/phase6-ai-pipeline.md §二.5）
         self.set_rate("combat", TICK_BULLET)
         self.set_rate("logistics", TICK_GROUND)
 
@@ -168,7 +169,9 @@ class SimulationLoop:
 
         # 按依赖链顺序调度（挂载即执行，未挂载跳过）
         # 多分辨率：配置了分频周期的子系统按累加器到期执行；否则每帧执行
-        for name in ("movement", "detection", "combat", "logistics"):
+        # Phase 6c：ai（编队决策 + 单位执行）插在 detection 之后（读接触）、
+        # combat 之前（开火即时 spawn，弹丸本 tick 在 combat 推进）
+        for name in ("movement", "detection", "ai", "combat", "logistics"):
             hook = self._hooks.get(name)
             if hook is None:
                 continue

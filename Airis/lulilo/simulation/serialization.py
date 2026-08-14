@@ -87,6 +87,19 @@ def _pack_pool_arrays(arrays: dict[str, np.ndarray]) -> dict:
     return {name: encode_ndarray(arr) for name, arr in arrays.items()}
 
 
+# Phase 6c AI 字段（docs/phase6-ai-design.md §1.1；旧存档缺失 → 保持构造默认）
+_ARMOR_AI_FIELDS = (
+    "team",
+    "role",
+    "order",
+    "target_idx",
+    "target_kind",
+    "comm",
+    "contact_age",
+    "formation_id",
+)
+
+
 def _restore_armor(data: dict) -> ArmorPool:
     cap = data["capacity"]
     pool = ArmorPool(capacity=cap)
@@ -97,6 +110,10 @@ def _restore_armor(data: dict) -> ArmorPool:
         pool.rcs = decode_ndarray(data["rcs"])
     if "ecm" in data:
         pool.ecm = decode_ndarray(data["ecm"])
+    # Phase 6c：AI 字段（旧存档缺失 → 保持构造默认）
+    for name in _ARMOR_AI_FIELDS:
+        if name in data:
+            setattr(pool, name, decode_ndarray(data[name]))
     _rebuild_free_stack(pool, pool.active)
     return pool
 
@@ -242,6 +259,15 @@ def serialize_battlefield(
                     # Phase 6b：电磁特征
                     "rcs": armor.rcs,
                     "ecm": armor.ecm,
+                    # Phase 6c：AI 字段（docs/phase6-ai-design.md §1.1）
+                    "team": armor.team,
+                    "role": armor.role,
+                    "order": armor.order,
+                    "target_idx": armor.target_idx,
+                    "target_kind": armor.target_kind,
+                    "comm": armor.comm,
+                    "contact_age": armor.contact_age,
+                    "formation_id": armor.formation_id,
                 }
             ),
         }

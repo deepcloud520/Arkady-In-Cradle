@@ -118,8 +118,8 @@ class WorldAdapter:
         Note:
             - 直接引用 SoA 数组，不拷贝（浅视图）
             - confidence 恒 1.0 / status 恒 ACTIVE（上帝视角）
-            - armor.side：ArmorPool 暂无该字段（Phase 8 接入），
-              通过 getattr 读取；缺失时全 0（友军），可动态附加演示
+            - armor.team：Phase 6c 正式下沉为 SoA 字段（docs/phase6-ai-design.md §1.1）；
+              通过 getattr 读取，缺失时回退旧动态 side 属性，再缺失全 0（友军）
         """
         armor = snapshot.pools.get("armor")
         box = snapshot.pools.get("box")
@@ -152,7 +152,9 @@ class WorldAdapter:
                 tick_count=snapshot.tick_count,
             )
 
-        side = getattr(armor, "side", None)
+        side = getattr(armor, "team", None)
+        if side is None:
+            side = getattr(armor, "side", None)  # 兼容旧动态属性（Phase 6c 前演示）
         if side is None:
             side = np.zeros(n, dtype=np.uint8)
         pitch = getattr(armor, "pitch", None)

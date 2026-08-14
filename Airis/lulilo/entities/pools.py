@@ -28,6 +28,7 @@ MAX_ARMOR = 2048
 MAX_BOXES = 4096
 MAX_PROJ = 16384
 MAX_EMITTERS = 4096  # Phase 6b 电磁辐射源池（2048 装甲红外 + 导引头/照射器 + 余量）
+MAX_FORMATIONS = 256  # Phase 6c 编队 AI 池（docs/phase6-ai-design.md §1.2）
 
 # ---------------------------------------------------------------------------
 # 枚举
@@ -140,6 +141,16 @@ class ArmorPool:
         self.rcs = np.full(self.capacity, 50.0, dtype=np.float32)
         self.ecm = np.zeros(self.capacity, dtype=np.float32)
 
+        # ---- Phase 6c AI 字段（docs/phase6-ai-design.md §1.1）----
+        self.team = np.zeros(self.capacity, dtype=np.int8)          # 阵营：0=友 1=敌 2=中立
+        self.role = np.zeros(self.capacity, dtype=np.int8)          # 角色：0坦克 1炮兵 2侦察 3防空 4攻顶ATGM发射器 5预留(空中,Phase7)
+        self.order = np.zeros(self.capacity, dtype=np.int8)         # 编队下达的执行指令（UnitOrder，非单位独立意图）
+        self.target_idx = np.full(self.capacity, -1, dtype=np.int32)  # 编队分配的目标装甲索引（-1 无）
+        self.target_kind = np.zeros(self.capacity, dtype=np.int8)   # 目标类型：0=装甲 1=辐射源 2=光斑 3=地形点
+        self.comm = np.ones(self.capacity, dtype=np.float32)        # 通信质量 0~1（数据链，门控命令下达）
+        self.contact_age = np.full(self.capacity, 1e9, dtype=np.float32)  # 最近一次接触距今（秒，态势老化）
+        self.formation_id = np.full(self.capacity, -1, dtype=np.int32)  # 所属编队 AI 池索引（-1 未编队）
+
         # 空闲栈：存储未被占用的索引
         self._free_stack: list[int] = list(range(self.capacity))
 
@@ -160,6 +171,9 @@ class ArmorPool:
         mesh_id: int = -1,
         rcs: float = 50.0,
         ecm: float = 0.0,
+        team: int = 0,
+        role: int = 0,
+        formation_id: int = -1,
     ) -> int:
         """生成一辆装甲车，返回其池索引。池满则扩容后继续。
 
@@ -191,6 +205,15 @@ class ArmorPool:
         self.roll_vel[idx] = 0.0
         self.rcs[idx] = float(rcs)
         self.ecm[idx] = float(ecm)
+        # ---- Phase 6c AI 字段（docs/phase6-ai-design.md §1.1）----
+        self.team[idx] = int(team)
+        self.role[idx] = int(role)
+        self.order[idx] = 0
+        self.target_idx[idx] = -1
+        self.target_kind[idx] = 0
+        self.comm[idx] = 1.0
+        self.contact_age[idx] = 1e9
+        self.formation_id[idx] = int(formation_id)
         # 清除残留路径
         self.wp[idx] = 0.0
         self.wp_count[idx] = 0
@@ -265,8 +288,129 @@ class ArmorPool:
         self.roll_vel = _resize(self.roll_vel, (new_cap,))
         self.rcs = _resize(self.rcs, (new_cap,))
         self.ecm = _resize(self.ecm, (new_cap,))
+        # ---- Phase 6c AI 字段（docs/phase6-ai-design.md §1.1）----
+        self.team = _resize(self.team, (new_cap,))
+        self.role = _resize(self.role, (new_cap,))
+        self.order = _resize(self.order, (new_cap,))
+        self.target_idx = _resize(self.target_idx, (new_cap,))
+        self.target_kind = _resize(self.target_kind, (new_cap,))
+        self.comm = _resize(self.comm, (new_cap,))
+        self.contact_age = _resize(self.contact_age, (new_cap,))
+        self.formation_id = _resize(self.formation_id, (new_cap,))
 
         old_cap = self.capacity
+        # ---- 非零默认值补填（_resize 用 zeros；新区恢复构造默认）----
+        self.target_idx[old_cap:] = -1
+        self.comm[old_cap:] = 1.0
+        self.contact_age[old_cap:] = 1e9
+        self.formation_id[old_cap:] = -1
+        self.rcs[old_cap:] = 50.0  # 既有遗留：rcs 构造默认 50.0（非零）
+
+        self.capacity = new_cap
+        self._free_stack.extend(range(old_cap, new_cap))
+
+
+# ---------------------------------------------------------------------------
+# FormationAIPool（Phase 6c，docs/phase6-ai-design.md §1.2）
+# ---------------------------------------------------------------------------
+
+
+class FormationAIPool:
+    """编队 AI 池（SoA，MAX_FORMATIONS=256）。一编队 = 单/多单位，战术姿态由编队 AI 决定。
+
+    数组布局:
+        active       (N,)   bool_   编队存活
+        team         (N,)   int8    阵营
+        role         (N,)   int8    编队角色（装甲/炮兵/侦察/混合）
+        intent       (N,)   int8    编队意图 FSM（FormationIntent，simulation/ai.py）
+        order        (N,)   int8    编队级命令（上级/玩家下达）
+        stance       (N,)   int8    战术姿态（进攻/防御）
+        target_zone  (N, 3) float32 任务目标区中心
+        comm         (N,)   float32 编队通信质量（指挥链门控）
+        member_count (N,)   int32   成员数
+        contact_set  (N,)   Python  汇总敌接触表（非热路径，Python list）
+    """
+
+    def __init__(self, capacity: int = MAX_FORMATIONS) -> None:
+        self.capacity = int(capacity)
+        self.active = np.zeros(capacity, dtype=np.bool_)
+        self.team = np.zeros(capacity, dtype=np.int8)
+        self.role = np.zeros(capacity, dtype=np.int8)
+        self.intent = np.zeros(capacity, dtype=np.int8)
+        self.order = np.zeros(capacity, dtype=np.int8)
+        self.stance = np.zeros(capacity, dtype=np.int8)
+        self.target_zone = np.zeros((capacity, 3), dtype=np.float32)
+        self.comm = np.ones(capacity, dtype=np.float32)
+        self.member_count = np.zeros(capacity, dtype=np.int32)
+        self.contact_set: list[list | None] = [None] * capacity
+        self._free_stack: list[int] = list(range(capacity))
+
+    def spawn(
+        self,
+        team: int = 0,
+        role: int = 0,
+        target_zone: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    ) -> int:
+        """登记一个编队 AI，返回池索引。池满则扩容后继续。
+
+        Args:
+            team: 阵营（0=友 1=敌 2=中立）。
+            role: 编队角色（0=装甲 1=炮兵 2=侦察 3=防空 4=攻顶ATGM 5=混合/预留）。
+            target_zone: 任务目标区中心 (x, y, z)。
+        """
+        if not self._free_stack:
+            self._expand()
+        idx = self._free_stack.pop()
+        self.active[idx] = True
+        self.team[idx] = int(team)
+        self.role[idx] = int(role)
+        self.intent[idx] = 0
+        self.order[idx] = 0
+        self.stance[idx] = 0
+        self.target_zone[idx] = target_zone
+        self.comm[idx] = 1.0
+        self.member_count[idx] = 0
+        self.contact_set[idx] = None
+        return idx
+
+    def destroy(self, idx: int) -> None:
+        """注销编队 AI（标记 inactive，归还索引）。"""
+        self.active[idx] = False
+        self.contact_set[idx] = None
+        self._free_stack.append(idx)
+
+    @property
+    def active_count(self) -> int:
+        """当前活跃编队数。"""
+        return int(np.sum(self.active))
+
+    def active_indices(self) -> np.ndarray:
+        """返回所有 active=True 的索引数组。"""
+        return np.flatnonzero(self.active)
+
+    def _expand(self, factor: float = 2.0) -> None:
+        """内部扩容（Tick 间隙调用，原子引用替换）。"""
+        new_cap = max(int(self.capacity * factor), self.capacity + 1)
+
+        def _resize(old: np.ndarray, shape: tuple[int, ...]) -> np.ndarray:
+            new_arr = np.zeros(shape, dtype=old.dtype)
+            slices = tuple(slice(0, min(old.shape[i], shape[i])) for i in range(old.ndim))
+            new_arr[slices] = old[slices]
+            return new_arr
+
+        self.active = _resize(self.active, (new_cap,))
+        self.team = _resize(self.team, (new_cap,))
+        self.role = _resize(self.role, (new_cap,))
+        self.intent = _resize(self.intent, (new_cap,))
+        self.order = _resize(self.order, (new_cap,))
+        self.stance = _resize(self.stance, (new_cap,))
+        self.target_zone = _resize(self.target_zone, (new_cap, 3))
+        self.comm = _resize(self.comm, (new_cap,))
+        self.member_count = _resize(self.member_count, (new_cap,))
+        self.contact_set.extend([None] * (new_cap - self.capacity))
+
+        old_cap = self.capacity
+        self.comm[old_cap:] = 1.0  # 非零默认值补填（_resize 用 zeros）
         self.capacity = new_cap
         self._free_stack.extend(range(old_cap, new_cap))
 
