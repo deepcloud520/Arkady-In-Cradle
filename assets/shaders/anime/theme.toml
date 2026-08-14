@@ -1,0 +1,35 @@
+[theme]
+id = "anime"
+name = "日系动漫"
+author = "Arkady in Cradle"
+version = "1.0"
+description = "日系卡通渲染：3 级 cel 色阶 + 深度/法线描边 + 粉彩调色 + 大气透视"
+
+[uniforms]
+# 光照（沿用统一接口）
+u_light_dir = [0.45, -0.60, 0.65]
+u_light_color = [1.0, 0.98, 0.95]      # 柔和白光
+u_sky_color = [0.82, 0.72, 0.95]        # 粉紫天光
+u_ground_color = [0.52, 0.47, 0.42]     # 暖灰地光
+u_ambient_strength = 0.55               # 亮调粉彩
+# cel shading
+u_shadow_threshold = 0.18
+u_highlight_threshold = 0.55
+u_shadow_tint = [0.62, 0.66, 0.92]      # 蓝紫补色
+# 粉彩
+u_saturation = 0.85
+u_brightness = 1.10
+# 描边
+u_outline_color = [0.12, 0.10, 0.16]    # 深紫黑（非纯黑，日系）
+u_outline_threshold = 0.004             # 平方锐化后量级（0.09²≈0.008）
+u_depth_edge_scale = 0.0                # 深度通道 early-z 下失效，默认关（留档）
+u_normal_edge_scale = 1.5
+# 大气透视
+u_near = 3.0
+u_far = 12000.0
+u_fog_near = 300.0
+u_fog_far = 3000.0
+u_fog_color = [0.78, 0.70, 0.88]        # 远景染天光
+u_fog_strength = 0.35
+# 调试（0=正常渲染）
+u_debug_edge = 0

@@ -99,6 +99,16 @@ class TerrainMap:
             self._nav_graph = NavMeshBuilder(self.heightfield).build()
         return self._nav_graph
 
+    def invalidate_geometry(self) -> None:
+        """地形破坏（remove_span，如 SAL 炸桥）后失效全部懒缓存。
+
+        下次访问 world_mesh / render_world_mesh / nav_graph 时重建
+        （AGENTS.md §3.3 自由破坏 → 后台局部重建路径；本容器同步失效）。
+        """
+        self._world_mesh = None
+        self._render_world_mesh = None
+        self._nav_graph = None
+
     @property
     def render_world_mesh(self) -> WorldMesh:
         """获取渲染用 WorldMesh（DualContour 完整 3D：顶/底/侧面）。

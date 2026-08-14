@@ -52,7 +52,7 @@ class AmmoType(IntEnum):
 
     ⚠️ 升级预留：编号 6~34 已预留给 HE_FRAG/PELE/THERMOBARIC/APCR/APCBC/
     HEAT_MP/AMP/CANISTER/炮射导弹/步兵弹药/防空可编程弹（AHEAD/3P/VT 等）。
-    完整规划见 docs/ammunition-expansion-design.md §一。本阶段不新增。
+    完整规划见 docs/ammunition-expansion-design.md §一。
     """
     APFSDS = 0   # 尾翼稳定脱壳穿甲弹（动能）
     AP = 1       # 普通穿甲弹（动能）
@@ -60,6 +60,7 @@ class AmmoType(IntEnum):
     HE = 3       # 高爆弹
     ATGM = 4     # 反坦克导弹（化学能）
     HESH = 5     # 碎甲弹
+    SENSOR_FUZED = 35  # 末敏弹（攻顶，Phase 6b；追加不重排既有值，旧存档兼容）
 
 
 class GuidanceType(IntEnum):
@@ -68,6 +69,24 @@ class GuidanceType(IntEnum):
     WIRE = 1             # 线导
     SAL = 2              # 半主动激光
     FIRE_AND_FORGET = 3  # 发射后不管
+
+
+class SeekerType(IntEnum):
+    """导引头类型（Phase 6b，docs/phase6-guidance-pipeline.md §6.5）。
+
+    辐射特性表（决定「能否被反辐射跟踪」）：
+        ACTIVE_RADAR     导引头强辐射 → 可被 ESM 检测 / ARM 跟踪（开导引头=暴露自己）
+        SEMI_ACTIVE_LASER 不辐射（依赖外部激光照射器；照射器可被激光告警）
+        IR_IMAGING / TV_EO / SENSOR_FUZED 全被动，无法被反辐射跟踪
+        PASSIVE_RF       反辐射 ARM 本体（自己是检测方）
+    """
+    NONE = 0               # 无导引头（无制导，guid_law=-1）
+    ACTIVE_RADAR = 1       # 主动雷达导引头：持续辐射，强辐射源（kind=1）
+    SEMI_ACTIVE_LASER = 2  # 半主动激光：依赖外部激光照射器光斑（kind=4）
+    IR_IMAGING = 3         # 红外成像：完全被动，检测红外 emitter（band=IR）
+    PASSIVE_RF = 4         # 被动雷达（反辐射 ARM）：追踪敌方辐射源（band=RF）
+    TV_EO = 5              # 电视/光电：被动（简化并入红外）
+    SENSOR_FUZED = 6       # 毫米波+红外扫描（末敏弹，design §13.3；追加不重排）
 
 
 # ---------------------------------------------------------------------------
@@ -79,7 +98,10 @@ class AmmoConfig(BaseModel):
     """弹药定义（design doc §八：pen_mm_rha / is_heat / drag_coefficient）。
 
     ⚠️ 升级预留：未来扩展字段（Lanz-Odermatt 参数 / 爆炸破片参数 / 引信可编程
-    参数）规划见 docs/ammunition-expansion-design.md §三。本阶段不新增字段。
+    参数）规划见 docs/ammunition-expansion-design.md §三。
+
+    Phase 6b（docs/phase6-guidance-pipeline.md §2.4）追加制导/导引头/末敏弹字段——
+    全部带默认值，旧 YAML / 旧测试构造无需改动即通过校验（`extra=forbid` 下已一次加齐）。
     """
 
     ammo_id: str
@@ -91,6 +113,42 @@ class AmmoConfig(BaseModel):
     guidance: GuidanceType = GuidanceType.NONE
     drag_coefficient: float = Field(default=0.15, ge=0.0, le=1.0, description="弹芯阻力")
     is_heat: bool = False  # 化学能弹（穿深不随距离衰减）
+
+    # ---- 导弹控制律（docs §五/§12.1；推进剖面 × 制导律合一）----
+    control_law_id: str = ""              # 导弹控制律注册表 id（guidance != NONE 时必填）
+    nav_gain: float = 3.0                 # 制导增益 N（传给公共制导律求解器，per-ammo）
+    seeker: SeekerType = SeekerType.NONE
+    emitter_power_db: float = 60.0        # ACTIVE_RADAR 辐射功率
+    # ---- 导引头性能（全 YAML 可配，体现导弹优劣，§6.5）----
+    # —— emitter 方向性（发射侧）：f↑/D↑ → 主瓣窄 → 能量集中、旁瓣低 ——
+    seeker_freq_ghz: float = 10.0         # 发射频率（f↑ → 主瓣窄、能量集中、旁瓣低）
+    antenna_diameter_m: float = 0.3       # 天线口径（θ≈70°·λ/D，与 f 共同决定主瓣宽度）
+    # —— seeker 视场（接收侧）：视场是接收方属性，直接配置，不走 GHz ——
+    search_fov_deg: float = 30.0          # seeker 搜索视场（宽，未锁定）
+    track_fov_deg: float = 5.0            # seeker 跟踪视场（窄，锁定后抗跳变）
+    filter_quality: float = 0.7           # 滤波能力 0~1（坐标估计精度 + 抗干扰强度）
+    # ---- ARM 记忆模式与末端引导（§12.1）----
+    memory_mode: bool = True
+    terminal_seeker: SeekerType = SeekerType.NONE
+    terminal_range_m: float = 0.0         # 0=禁用
+    ins_drift_m_s: float = 0.0            # 惯性漂移（本阶段 0，Phase 7 启用）
+    # ---- 激光吊舱（SAL，§7.5）----
+    beam_divergence_deg: float = 1.0      # 吊舱激光束发散角（决定光斑大小，本阶段仅描述）
+    # ---- 通信（2026-08-14；对齐单位模型，人在回路门控，非专门数据链系统）----
+    comm_threshold: float = 0.5           # 人在回路命令可达的通信门限（guid_comm ≥ 此值）
+    # 注：guid_confidence 属友军孪生层（Phase 8），不存 AmmoConfig；
+    #     制导「丢失」由 detection 决定（§5.2/§6.5）
+    # ---- 末敏弹（§13.3）----
+    efp_pen_mm: float = 0.0
+    scan_altitude_m: float = 150.0
+    scan_radius_m: float = 80.0
+    scan_rps: float = 6.0                 # 预留（本阶段扫描全向，不消费）
+    scan_duration_s: float = 5.0
+    top_armor_factor: float = 0.3
+    mmw_emitter_power_db: float = 40.0
+    # ---- 双模扫描阈值（§2.3/§7.2，抗诱饵：双源都达标才引爆）----
+    mmw_threshold: float = 5.0            # 毫米波反射阈值（ArmorPool.rcs）
+    ir_threshold: float = 0.1             # 红外辐射阈值（EmitterPool 红外 emitter 的 cur_power，含残热）
 
     model_config = {"extra": "forbid"}
 

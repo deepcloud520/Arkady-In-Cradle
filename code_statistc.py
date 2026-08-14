@@ -5,12 +5,12 @@ def total_code_lines(path: Path) -> int:
     with open(path, "r", encoding="utf-8") as f:
         count = len(f.readlines())
     return count
+def count_code_lines_in_directory(directory: Path) -> int:
+    print(f"Counting code lines in {directory} ...")
+    total_lines = 0
+    for file_path in directory.rglob("*.py"):
+        total_lines += total_code_lines(file_path)
+    return total_lines
 if __name__ == "__main__":
     root_dir = Path(__file__).parent / "Airis"
-    print(f"Counting code lines in {root_dir} ...")
-    total_lines = 0
-    for file_path in root_dir.rglob("*.py"):
-        lines = total_code_lines(file_path)
-        total_lines += lines
-        print(f"{file_path.name}: {lines} lines")
-    print(f"Total code lines: {total_lines}")
+    print(f"Total code lines: {count_code_lines_in_directory(root_dir)}")

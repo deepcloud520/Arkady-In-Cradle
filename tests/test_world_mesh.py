@@ -18,9 +18,11 @@ import numpy as np
 import pytest
 
 from Airis.lulilo.movement.integrate import (
+    _z_bilinear_flat,
     integrate_armor_movement_3d,
     resolve_mesh_ids,
 )
+from Airis.lulilo.terrain.dual_contour import DualContourBuilder
 from Airis.lulilo.terrain.heightfield import (
     MAT_BRIDGE,
     MAT_BUILDING,
@@ -278,6 +280,122 @@ class TestFlattenAndIntegrate:
         assert point_in_polygon(2.0, 2.0, verts)
         assert not point_in_polygon(5.0, 2.0, verts)
         assert point_in_polygon(0.0, 0.0, verts)  # 边界含
+
+
+# ---------------------------------------------------------------------------
+# E1 采样斜面（docs/suspension-slope-design.md §4.2）：双线性 z + 梯度法线
+# ---------------------------------------------------------------------------
+
+
+class TestPatchSamplingE1:
+    """WorldPatch.z_at / normal_at 双线性采样（悬挂触点采样的前置）。"""
+
+    def _sloped_patch(self) -> WorldPatch:
+        """双线性曲面四边形：v=[(0,0,1),(4,0,3),(4,4,5),(0,4,2)]。"""
+        verts = np.array(
+            [[0, 0, 1], [4, 0, 3], [4, 4, 5], [0, 4, 2]], dtype=np.float32
+        )
+        return WorldPatch(
+            patch_id=0, vertices=verts,
+            normal=np.array([0, 0, 1], dtype=np.float32), mat=MAT_TERRAIN,
+        )
+
+    def test_z_at_corners_and_center(self):
+        p = self._sloped_patch()
+        assert p.z_at(0, 0) == pytest.approx(1.0)
+        assert p.z_at(4, 0) == pytest.approx(3.0)
+        assert p.z_at(4, 4) == pytest.approx(5.0)
+        assert p.z_at(0, 4) == pytest.approx(2.0)
+        assert p.z_at(2, 2) == pytest.approx(2.75)  # 双线性中点 = 四角均值
+        assert p.z_at(2, 0) == pytest.approx(2.0)   # 沿 x 线性（z1-z0 均匀）
+
+    def test_z_at_planar_is_constant(self):
+        verts = np.array(
+            [[0, 0, 5], [4, 0, 5], [4, 4, 5], [0, 4, 5]], dtype=np.float32
+        )
+        p = WorldPatch(
+            patch_id=0, vertices=verts,
+            normal=np.array([0, 0, 1], dtype=np.float32), mat=MAT_TERRAIN,
+        )
+        assert p.z_at(1, 3) == pytest.approx(5.0)
+        assert p.z_at(2, 2) == pytest.approx(5.0)  # 结构面片退化常量
+
+    def test_normal_at_gradient(self):
+        # 沿 x 抬升的斜面：∂z/∂x=0.5, ∂z/∂y=0 → n ∝ (-0.5, 0, 1)
+        verts = np.array(
+            [[0, 0, 0], [4, 0, 2], [4, 4, 2], [0, 4, 0]], dtype=np.float32
+        )
+        p = WorldPatch(
+            patch_id=0, vertices=verts,
+            normal=np.array([0, 0, 1], dtype=np.float32), mat=MAT_TERRAIN,
+        )
+        n = p.normal_at(2, 2)
+        scale = np.sqrt(0.25 + 1.0)
+        assert n[0] == pytest.approx(-0.5 / scale, abs=1e-5)
+        assert n[1] == pytest.approx(0.0, abs=1e-6)
+        assert n[2] == pytest.approx(1.0 / scale, abs=1e-5)
+        assert np.linalg.norm(n) == pytest.approx(1.0)
+
+    def test_normal_at_planar_is_constant(self):
+        verts = np.array(
+            [[0, 0, 5], [4, 0, 5], [4, 4, 5], [0, 4, 5]], dtype=np.float32
+        )
+        p = WorldPatch(
+            patch_id=0, vertices=verts,
+            normal=np.array([0, 0, 1], dtype=np.float32), mat=MAT_TERRAIN,
+        )
+        n = p.normal_at(2, 2)
+        assert n[2] == pytest.approx(1.0)
+        assert n[0] == pytest.approx(0.0, abs=1e-6)
+
+    def test_z_bilinear_flat_matches_python(self):
+        """Numba 展平版 _z_bilinear_flat 与 Python 版 z_at 逐点一致。"""
+        p = self._sloped_patch()
+        mesh = WorldMesh(patches=[p])
+        pv, vstart, vcnt, norm = flatten_world_mesh(mesh)
+        for x, y in [(0, 0), (4, 0), (4, 4), (0, 4), (2, 2), (2, 0), (1.3, 2.7)]:
+            assert _z_bilinear_flat(
+                pv, vstart, vcnt, norm, 0, x, y
+            ) == pytest.approx(p.z_at(x, y))
+
+    def test_integrate_3d_z_continuous_on_slope(self):
+        """斜坡连续场 + DualContour：单位在面片内移动 z 连续（无 v0.z 阶梯）。"""
+        w = h = 8
+        cs = 2.0
+        hf = Heightfield(width=w, height=h, cs=cs, ch=1.0, z_min=-50.0, z_max=200.0)
+        hf.set_ground_layer(np.zeros((h, w), dtype=np.float32))
+        # 连续场 z = 0.5*x（世界 x 方向线性坡）；量化层全 0
+        xs = (np.arange(w) + 0.5) * cs
+        gx, _ = np.meshgrid(xs, xs)
+        continuous = (0.5 * gx).astype(np.float32)
+
+        mesh = DualContourBuilder(hf, continuous_ground=continuous).build()
+        pv, vstart, vcnt, norm = flatten_world_mesh(mesh)
+
+        # 地面格 (1,1)（x∈[2,4]）：z 从 x=2 的 1.0 线性升到 x=4 的 2.0
+        pid = mesh.locate_patch(3.0, 3.0, hint_z=1.0)
+        assert pid >= 0
+        assert mesh.patches[pid].mat == MAT_TERRAIN
+
+        n = 1
+        pos = np.array([[2.0, 3.0, 0.0]], dtype=np.float32)
+        yaw = np.zeros(n, dtype=np.float32)
+        active = np.ones(n, dtype=np.bool_)
+        wp = np.zeros((n, 8, 2), dtype=np.float32)
+        wp_count = np.array([1], dtype=np.uint8)
+        wp_idx = np.zeros(n, dtype=np.uint8)
+        wp[0, 0] = (3.0, 3.0)
+        speed = np.full(n, 10.0, dtype=np.float32)
+        mesh_id = np.array([pid], dtype=np.int32)
+
+        integrate_armor_movement_3d(
+            pos, yaw, active, wp, wp_count, wp_idx, speed, 1.0,
+            mesh_id, pv, vstart, vcnt, norm,
+        )
+        assert pos[0, 0] == pytest.approx(3.0)
+        # 双线性：z(3,3) = 1.5（旧 ray_plane_z 恒 v0.z=1.0，阶梯）
+        assert pos[0, 2] == pytest.approx(1.5, abs=1e-4)
+        assert int(mesh_id[0]) == pid  # 仍在面片内
 
 
 # ---------------------------------------------------------------------------

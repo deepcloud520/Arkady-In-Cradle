@@ -1,0 +1,14 @@
+[theme]
+id = "default"
+name = "默认（现实军事）"
+author = "Arkady in Cradle"
+version = "1.0"
+description = "现实军事风格：半球环境光 + 方向光，自然色"
+
+[uniforms]
+# 与改动前 gl_widget.py 内联着色器的 uniform 默认值完全一致（保证无回归）
+u_light_dir = [0.45, -0.60, 0.65]
+u_light_color = [1.0, 0.97, 0.90]
+u_sky_color = [0.55, 0.65, 0.85]
+u_ground_color = [0.30, 0.28, 0.22]
+u_ambient_strength = 0.42

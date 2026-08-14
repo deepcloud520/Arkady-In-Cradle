@@ -58,6 +58,76 @@ _FACE_NORMALS: dict[int, tuple[float, float, float]] = {
     FACE_NY: (0.0, -1.0, 0.0),
 }
 
+
+# ---------------------------------------------------------------------------
+# 面片逐点采样（docs/suspension-slope-design.md §4.2 E1 采样斜面）
+# ---------------------------------------------------------------------------
+# 地面面片顶点 z 已用 continuous_ground 平滑成双线性曲面，但法线仍恒
+# (0,0,1)、ray_plane_z 平面近似（n=(0,0,1) 时退化 v0.z）→ 面片内移动 z
+# 阶梯。E1 引入「轴对齐矩形 4 顶点 → 双线性插值 + 梯度法线」：
+#   - 结构面片 4 顶点 z 相同 → 双线性自然退化为常量（兼容）
+#   - 悬挂触点采样 / 移动 z 同步统一走双线性（消除阶梯）
+#   - 未来结构斜面（E2）顶点 z 各异 → 双线性/梯度自动适配，无需分派
+
+
+def _is_bilinear_rect(vertices: np.ndarray) -> bool:
+    """是否轴对齐矩形 4 顶点（顶点顺序 [x0y0, x1y0, x1y1, x0y1]）。
+
+    dual_contour / WorldMeshBuilder 输出的所有面片均为轴对齐矩形且
+    遵守该顺序；侧面（垂直矩形）v1.x - v0.x = 0 → 判定 False。
+    """
+    if len(vertices) != 4:
+        return False
+    v0, v1, v3 = vertices[0], vertices[1], vertices[3]
+    return abs(float(v1[0] - v0[0])) > 1e-9 and abs(float(v3[1] - v0[1])) > 1e-9
+
+
+def _bilinear_rect(vertices: np.ndarray, x: float, y: float) -> float:
+    """轴对齐矩形面片双线性 z 采样。
+
+    u=(x-x0)/dx, v=(y-y0)/dy（钳制 [0,1]），z = 双线性组合 4 顶点 z。
+    结构面片（4 顶点 z 相同）自然退化为常量 z。
+    """
+    v0, v1, v2, v3 = vertices[0], vertices[1], vertices[2], vertices[3]
+    dx = float(v1[0] - v0[0])
+    dy = float(v3[1] - v0[1])
+    if dx < 1e-9 or dy < 1e-9:
+        return float(v0[2])
+    u = float(np.clip((x - v0[0]) / dx, 0.0, 1.0))
+    v = float(np.clip((y - v0[1]) / dy, 0.0, 1.0))
+    z00, z10, z11, z01 = float(v0[2]), float(v1[2]), float(v2[2]), float(v3[2])
+    return (
+        (1.0 - u) * (1.0 - v) * z00
+        + u * (1.0 - v) * z10
+        + u * v * z11
+        + (1.0 - u) * v * z01
+    )
+
+
+def _gradient_normal(vertices: np.ndarray, x: float, y: float) -> np.ndarray:
+    """双线性曲面逐点法线（∂P/∂u × ∂P/∂v 归一化）。
+
+    P(u,v) = (x0+u·dx, y0+v·dy, z(u,v))
+    → n ∝ (-∂z/∂x, -∂z/∂y, 1)；平面（z 相同）时退化为 (0,0,1)。
+    """
+    v0, v1, v2, v3 = vertices[0], vertices[1], vertices[2], vertices[3]
+    dx = float(v1[0] - v0[0])
+    dy = float(v3[1] - v0[1])
+    if dx < 1e-9 or dy < 1e-9:
+        return np.array([0.0, 0.0, 1.0], dtype=np.float32)
+    u = float(np.clip((x - v0[0]) / dx, 0.0, 1.0))
+    v = float(np.clip((y - v0[1]) / dy, 0.0, 1.0))
+    z00, z10, z11, z01 = float(v0[2]), float(v1[2]), float(v2[2]), float(v3[2])
+    dz_du = (1.0 - v) * (z10 - z00) + v * (z11 - z01)
+    dz_dv = (1.0 - u) * (z01 - z00) + u * (z11 - z10)
+    nx = -dz_du * dy
+    ny = -dx * dz_dv
+    nz = dx * dy
+    ln = sqrt(nx * nx + ny * ny + nz * nz)
+    if ln < 1e-12:
+        return np.array([0.0, 0.0, 1.0], dtype=np.float32)
+    return np.array([nx / ln, ny / ln, nz / ln], dtype=np.float32)
+
 # ---------------------------------------------------------------------------
 # WorldPatch —— 3D 世界面片（世界模型的原子单元）
 # ---------------------------------------------------------------------------
@@ -91,6 +161,31 @@ class WorldPatch:
         if len(self.vertices) >= 3:
             self.area = float(_polygon_area_3d(self.vertices))
             self.centroid = self.vertices.mean(axis=0).astype(np.float32)
+
+    # ------------------------------------------------------------------
+    # 逐点采样（docs/suspension-slope-design.md §4.2 E1 采样斜面）
+    # ------------------------------------------------------------------
+
+    def z_at(self, x: float, y: float) -> float:
+        """面片内任意点 z：轴对齐矩形 4 顶点 → 双线性插值；否则平面求交。
+
+        地面面片（连续场平滑后顶点 z 各异）是双线性曲面——`ray_plane_z`
+        平面近似（n=(0,0,1) 时退化 v0.z）在面片内移动是阶梯的；双线性
+        消除阶梯（悬挂触点采样依赖）。结构面片 4 顶点 z 相同 → 退化为常量。
+        """
+        if _is_bilinear_rect(self.vertices):
+            return _bilinear_rect(self.vertices, x, y)
+        return self._ray_plane_z_impl(self, x, y)
+
+    def normal_at(self, x: float, y: float) -> np.ndarray:
+        """面片内任意点法线：双线性矩形 → 梯度法线；否则常量 normal。
+
+        双线性曲面逐点法线；4 顶点 z 相同时梯度为 0 → 退化为 (0,0,1)，
+        与常量法线一致。结构斜面（E2）未来顶点 z 各异 → 直接复用。
+        """
+        if _is_bilinear_rect(self.vertices):
+            return _gradient_normal(self.vertices, x, y)
+        return self.normal
 
 
 # ---------------------------------------------------------------------------

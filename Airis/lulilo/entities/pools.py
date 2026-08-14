@@ -27,6 +27,7 @@ from numba import njit, prange
 MAX_ARMOR = 2048
 MAX_BOXES = 4096
 MAX_PROJ = 16384
+MAX_EMITTERS = 4096  # Phase 6b 电磁辐射源池（2048 装甲红外 + 导引头/照射器 + 余量）
 
 # ---------------------------------------------------------------------------
 # 枚举
@@ -46,6 +47,36 @@ class ProjectileType(IntEnum):
     """抛射物类型。"""
     BULLET = 0   # 动能弹（APFSDS/AP）
     MISSILE = 1  # 导弹（ATGM）
+
+
+class EmitterBand(IntEnum):
+    """电磁辐射源波段（Phase 6b：物理上都是电磁波，仅波段不同）。
+
+    射频 = 雷达/主动导引头/ESM；红外 = 目标热辐射/红外诱饵；激光 = 激光照射器/光斑。
+    """
+    RF = 0      # 射频
+    IR = 1      # 红外
+    LASER = 2   # 激光
+
+
+# Emitter kind（docs/phase6-guidance-pipeline.md §2.2）：
+#   0=平台雷达  1=主动导引头（/末敏弹毫米波扫描器）  2=激光照射器
+#   3=红外辐射源  4=激光漫反射光斑（无父，不走 sync）
+EMITTER_KIND_PLATFORM_RADAR = 0
+EMITTER_KIND_SEEKER = 1
+EMITTER_KIND_ILLUMINATOR = 2
+EMITTER_KIND_IR_SOURCE = 3
+EMITTER_KIND_SPOT = 4
+
+# 父实体类型（EmitterPool.parent_kind）：0=装甲 1=弹丸 2=无父（光斑）
+EMITTER_PARENT_ARMOR = 0
+EMITTER_PARENT_PROJECTILE = 1
+EMITTER_PARENT_NONE = 2
+
+# Numba 用 int 常量（IntEnum 在 njit 中会报错）
+_BAND_IR = int(EmitterBand.IR)
+_BAND_RF = int(EmitterBand.RF)
+_BAND_LASER = int(EmitterBand.LASER)
 
 
 # ---------------------------------------------------------------------------
@@ -92,10 +123,22 @@ class ArmorPool:
 
         # 世界模型绑定（WorldMesh）
         self.mesh_id = np.full(self.capacity, -1, dtype=np.int32)
-        # 悬挂姿态（Phase A 预留，恒为 0；Phase B 后启用四触点解算）
+        # 悬挂姿态（docs/suspension-slope-design.md §3，2026-08-13 启用）
         self.pitch = np.zeros(self.capacity, dtype=np.float32)
         self.roll = np.zeros(self.capacity, dtype=np.float32)
         self.suspension = np.zeros(self.capacity, dtype=np.float32)
+        # 四触点表面 z + 各自面片（车跨桥头时前/后轮不同面片）
+        self.contact_z = np.zeros((self.capacity, 4), dtype=np.float32)
+        self.contact_mesh_id = np.full((self.capacity, 4), -1, dtype=np.int32)
+        # 弹簧阻尼速度项（方案 B 临界阻尼）
+        self.pitch_vel = np.zeros(self.capacity, dtype=np.float32)
+        self.roll_vel = np.zeros(self.capacity, dtype=np.float32)
+        # 电磁特征（Phase 6b，docs/phase6-guidance-pipeline.md §2.3）
+        #   rcs: 雷达截面积（反射特性，末敏弹毫米波阈值 / 射频导引头检测用）
+        #   ecm: ECM 干扰强度 0~1（压制敌方射频导引头检测）
+        # 注：红外特征已迁移到 EmitterPool（band=IR, kind=3，充能-残热模型）
+        self.rcs = np.full(self.capacity, 50.0, dtype=np.float32)
+        self.ecm = np.zeros(self.capacity, dtype=np.float32)
 
         # 空闲栈：存储未被占用的索引
         self._free_stack: list[int] = list(range(self.capacity))
@@ -115,6 +158,8 @@ class ArmorPool:
         yaw: float = 0.0,
         health: float = 100.0,
         mesh_id: int = -1,
+        rcs: float = 50.0,
+        ecm: float = 0.0,
     ) -> int:
         """生成一辆装甲车，返回其池索引。池满则扩容后继续。
 
@@ -125,9 +170,8 @@ class ArmorPool:
             health: 初始血量。
             mesh_id: 所在表面面片 ID（WorldMesh；-1=空中/未绑定，
                 随后由 z 同步自动定位）。
-
-        Returns:
-            装甲索引 (0..capacity-1)。
+            rcs: 雷达截面积 (m²，反射特性)。
+            ecm: ECM 干扰强度 0~1。
         """
         if not self._free_stack:
             self._expand()
@@ -141,6 +185,12 @@ class ArmorPool:
         self.pitch[idx] = 0.0
         self.roll[idx] = 0.0
         self.suspension[idx] = 0.0
+        self.contact_z[idx] = 0.0
+        self.contact_mesh_id[idx] = -1
+        self.pitch_vel[idx] = 0.0
+        self.roll_vel[idx] = 0.0
+        self.rcs[idx] = float(rcs)
+        self.ecm[idx] = float(ecm)
         # 清除残留路径
         self.wp[idx] = 0.0
         self.wp_count[idx] = 0
@@ -209,6 +259,12 @@ class ArmorPool:
         self.pitch = _resize(self.pitch, (new_cap,))
         self.roll = _resize(self.roll, (new_cap,))
         self.suspension = _resize(self.suspension, (new_cap,))
+        self.contact_z = _resize(self.contact_z, (new_cap, 4))
+        self.contact_mesh_id = _resize(self.contact_mesh_id, (new_cap, 4))
+        self.pitch_vel = _resize(self.pitch_vel, (new_cap,))
+        self.roll_vel = _resize(self.roll_vel, (new_cap,))
+        self.rcs = _resize(self.rcs, (new_cap,))
+        self.ecm = _resize(self.ecm, (new_cap,))
 
         old_cap = self.capacity
         self.capacity = new_cap
@@ -228,12 +284,16 @@ def _sync_boxes_kernel(
     box_pos: np.ndarray,       # (M, 3) 世界坐标（out，原地写）
     armor_pos: np.ndarray,     # (N, 3) 父装甲位置
     armor_yaw: np.ndarray,     # (N,) 父装甲朝向
+    armor_pitch: np.ndarray,   # (N,) 父装甲俯仰（绕车身横轴 ly）
+    armor_roll: np.ndarray,    # (N,) 父装甲侧倾（绕车身纵轴 lx）
     armor_active: np.ndarray,  # (N,) 父装甲存活
 ) -> None:
     """Numba 并行：把所有活跃碰撞箱从局部偏移变换到世界坐标。
 
-    与 Python 版 sync_from_parent 同语义（每元素独立 → 无竞争），
-    但全量并行——Phase 3 开火链每子弹 Tick 调用一次（16384 box 级 < 1ms）。
+    变换 = Rz(yaw)·Rx(roll)·Ry(pitch)·local（docs/suspension-slope-design.md
+    §3.8，与渲染 Model 矩阵同一约定）。与 Python 版 sync_from_parent 同语义
+    （每元素独立 → 无竞争），但全量并行——Phase 3 开火链每子弹 Tick 调用
+    一次（16384 box 级 < 1ms）。
     """
     m = box_pos.shape[0]
     for i in prange(m):
@@ -246,11 +306,22 @@ def _sync_boxes_kernel(
         lx, ly, lz = box_local[i]
         cos_y = np.cos(armor_yaw[p])
         sin_y = np.sin(armor_yaw[p])
-        box_pos[i, 0] = armor_pos[p, 0] + lx * cos_y - ly * sin_y
-        box_pos[i, 1] = armor_pos[p, 1] + lx * sin_y + ly * cos_y
-        box_pos[i, 2] = armor_pos[p, 2] + lz
-        # TODO(WorldMesh §5.6.4)：pitch/roll 非零后需连乘
-        # R_total = Rz(yaw)·Rx(roll)·Ry(pitch)，Phase A 保持 0 故不变。
+        cos_r = np.cos(armor_roll[p])
+        sin_r = np.sin(armor_roll[p])
+        cos_p = np.cos(armor_pitch[p])
+        sin_p = np.sin(armor_pitch[p])
+        # Ry(pitch)：绕车身横轴（y 轴）
+        v1x = lx * cos_p + lz * sin_p
+        v1y = ly
+        v1z = -lx * sin_p + lz * cos_p
+        # Rx(roll)：绕车身纵轴（x 轴）
+        v2x = v1x
+        v2y = v1y * cos_r - v1z * sin_r
+        v2z = v1y * sin_r + v1z * cos_r
+        # Rz(yaw)
+        box_pos[i, 0] = armor_pos[p, 0] + v2x * cos_y - v2y * sin_y
+        box_pos[i, 1] = armor_pos[p, 1] + v2x * sin_y + v2y * cos_y
+        box_pos[i, 2] = armor_pos[p, 2] + v2z
 
 
 class BoxPool:
@@ -343,17 +414,27 @@ class BoxPool:
         lx, ly, lz = self.local[idx]
         cos_y = np.cos(armor.yaw[p])
         sin_y = np.sin(armor.yaw[p])
-        # 2D 旋转 + 平移
-        wx = armor.pos[p, 0] + lx * cos_y - ly * sin_y
-        wy = armor.pos[p, 1] + lx * sin_y + ly * cos_y
-        wz = armor.pos[p, 2] + lz
+        cos_r = np.cos(armor.roll[p])
+        sin_r = np.sin(armor.roll[p])
+        cos_p = np.cos(armor.pitch[p])
+        sin_p = np.sin(armor.pitch[p])
+        # Rz(yaw)·Rx(roll)·Ry(pitch)·local（docs §3.8，与内核一致）
+        v1x = lx * cos_p + lz * sin_p
+        v1y = ly
+        v1z = -lx * sin_p + lz * cos_p
+        v2x = v1x
+        v2y = v1y * cos_r - v1z * sin_r
+        v2z = v1y * sin_r + v1z * cos_r
+        wx = armor.pos[p, 0] + v2x * cos_y - v2y * sin_y
+        wy = armor.pos[p, 1] + v2x * sin_y + v2y * cos_y
+        wz = armor.pos[p, 2] + v2z
         self.pos[idx] = (wx, wy, wz)
 
     def sync_all_from_parent(self, armor: ArmorPool) -> None:
         """批量同步所有活跃碰撞箱（Numba 并行，幂等可重复调用）。"""
         _sync_boxes_kernel(
             self.local, self.parent, self.active, self.pos,
-            armor.pos, armor.yaw, armor.active,
+            armor.pos, armor.yaw, armor.pitch, armor.roll, armor.active,
         )
 
     # ------------------------------------------------------------------
@@ -411,6 +492,22 @@ class ProjectilePool:
         weapon    (N,)   int32    武器注册表索引（-1 无；下沉自 _proj_meta dict）
         ammo      (N,)   int32    弹药注册表索引（-1 无；下沉自 _proj_meta dict）
         age       (N,)   float32  已飞行秒数（下沉自 _proj_age dict）
+
+    制导字段（Phase 6b，docs/phase6-guidance-pipeline.md §2.1）：
+        guid_target_pos      (N, 3) float32 当前检测到的目标世界坐标（detection 输出；
+                                          TRACK/TERMINAL 有效；fire 写初始瞄准坐标）
+        guid_law             (N,)   int32   控制律注册表索引（-1=无制导；末敏弹也有索引，
+                                          BALLISTIC 阶段该函数不制导）
+        guid_nav_gain        (N,)   float32 制导增益 N（per-ammo）
+        guid_stage           (N,)   int32   GuidanceStage（给控制回调的状态机输入）
+        guid_memory_pos      (N, 3) float32 最后已知目标位置（MEMORY 用）
+        guid_comm            (N,)   float32 通信质量 0~1（人在回路命令可达性门控）
+        guid_confidence      (N,)   float32 友军对导弹位置知晓置信度 0~1（认知孪生，
+                                          **与制导无关**，Phase 8 孪生层维护）
+        guid_override        (N,)   int32   人在回路推进指令（ManualOverride，已门控）
+        guid_search_fov_cos  (N,)   float32 seeker 搜索视场余弦（per-ammo，fire 写）
+        guid_track_fov_cos   (N,)   float32 seeker 跟踪视场余弦（per-ammo，fire 写）
+        guid_filter_quality  (N,)   float32 滤波能力 0~1（Python 检测层用）
     """
 
     def __init__(self, capacity: int = MAX_PROJ) -> None:
@@ -426,6 +523,19 @@ class ProjectilePool:
         self.weapon = np.full(self.capacity, -1, dtype=np.int32)
         self.ammo = np.full(self.capacity, -1, dtype=np.int32)
         self.age = np.zeros(self.capacity, dtype=np.float32)
+
+        # ---- 制导字段（docs/phase6-guidance-pipeline.md §2.1）----
+        self.guid_target_pos = np.zeros((self.capacity, 3), dtype=np.float32)
+        self.guid_law = np.full(self.capacity, -1, dtype=np.int32)
+        self.guid_nav_gain = np.full(self.capacity, 3.0, dtype=np.float32)
+        self.guid_stage = np.zeros(self.capacity, dtype=np.int32)
+        self.guid_memory_pos = np.zeros((self.capacity, 3), dtype=np.float32)
+        self.guid_comm = np.ones(self.capacity, dtype=np.float32)
+        self.guid_confidence = np.ones(self.capacity, dtype=np.float32)
+        self.guid_override = np.zeros(self.capacity, dtype=np.int32)
+        self.guid_search_fov_cos = np.ones(self.capacity, dtype=np.float32)
+        self.guid_track_fov_cos = np.ones(self.capacity, dtype=np.float32)
+        self.guid_filter_quality = np.full(self.capacity, 0.7, dtype=np.float32)
 
         self._free_stack: list[int] = list(range(self.capacity))
 
@@ -468,6 +578,18 @@ class ProjectilePool:
         self.ammo[idx] = int(ammo)
         self.age[idx] = 0.0
         self.active[idx] = True
+        # 制导字段初始化（fire() 随后按 ammo 写实际值）
+        self.guid_target_pos[idx] = 0.0
+        self.guid_law[idx] = -1
+        self.guid_nav_gain[idx] = 3.0
+        self.guid_stage[idx] = 0
+        self.guid_memory_pos[idx] = 0.0
+        self.guid_comm[idx] = 1.0
+        self.guid_confidence[idx] = 1.0
+        self.guid_override[idx] = 0
+        self.guid_search_fov_cos[idx] = 1.0
+        self.guid_track_fov_cos[idx] = 1.0
+        self.guid_filter_quality[idx] = 0.7
         return idx
 
     def destroy(self, idx: int) -> None:
@@ -477,6 +599,18 @@ class ProjectilePool:
         self.weapon[idx] = -1
         self.ammo[idx] = -1
         self.age[idx] = 0.0
+        # 制导字段清零（与 weapon/ammo/age 同批）
+        self.guid_target_pos[idx] = 0.0
+        self.guid_law[idx] = -1
+        self.guid_nav_gain[idx] = 3.0
+        self.guid_stage[idx] = 0
+        self.guid_memory_pos[idx] = 0.0
+        self.guid_comm[idx] = 1.0
+        self.guid_confidence[idx] = 1.0
+        self.guid_override[idx] = 0
+        self.guid_search_fov_cos[idx] = 1.0
+        self.guid_track_fov_cos[idx] = 1.0
+        self.guid_filter_quality[idx] = 0.7
         self._free_stack.append(idx)
 
     def destroy_batch(self, indices: np.ndarray) -> None:
@@ -486,6 +620,17 @@ class ProjectilePool:
         self.weapon[indices] = -1
         self.ammo[indices] = -1
         self.age[indices] = 0.0
+        self.guid_target_pos[indices] = 0.0
+        self.guid_law[indices] = -1
+        self.guid_nav_gain[indices] = 3.0
+        self.guid_stage[indices] = 0
+        self.guid_memory_pos[indices] = 0.0
+        self.guid_comm[indices] = 1.0
+        self.guid_confidence[indices] = 1.0
+        self.guid_override[indices] = 0
+        self.guid_search_fov_cos[indices] = 1.0
+        self.guid_track_fov_cos[indices] = 1.0
+        self.guid_filter_quality[indices] = 0.7
         self._free_stack.extend(indices.tolist())
 
     # ------------------------------------------------------------------
@@ -522,7 +667,317 @@ class ProjectilePool:
         self.weapon = _resize(self.weapon, (new_cap,))
         self.ammo = _resize(self.ammo, (new_cap,))
         self.age = _resize(self.age, (new_cap,))
+        # 制导字段同步扩容（dtype/维度不变，Numba 免重编译）
+        self.guid_target_pos = _resize(self.guid_target_pos, (new_cap, 3))
+        self.guid_law = _resize(self.guid_law, (new_cap,))
+        self.guid_nav_gain = _resize(self.guid_nav_gain, (new_cap,))
+        self.guid_stage = _resize(self.guid_stage, (new_cap,))
+        self.guid_memory_pos = _resize(self.guid_memory_pos, (new_cap, 3))
+        self.guid_comm = _resize(self.guid_comm, (new_cap,))
+        self.guid_confidence = _resize(self.guid_confidence, (new_cap,))
+        self.guid_override = _resize(self.guid_override, (new_cap,))
+        self.guid_search_fov_cos = _resize(self.guid_search_fov_cos, (new_cap,))
+        self.guid_track_fov_cos = _resize(self.guid_track_fov_cos, (new_cap,))
+        self.guid_filter_quality = _resize(self.guid_filter_quality, (new_cap,))
 
         old_cap = self.capacity
         self.capacity = new_cap
         self._free_stack.extend(range(old_cap, new_cap))
+
+
+# ---------------------------------------------------------------------------
+# EmitterPool（Phase 6b 统一电磁辐射源，docs/phase6-guidance-pipeline.md §2.2/§6.2）
+# ---------------------------------------------------------------------------
+
+
+@njit(cache=True, parallel=True)
+def _sync_emitters_kernel(
+    epos: np.ndarray,          # (M, 3) float32 辐射源位置（out，父位置同步）
+    eactive: np.ndarray,       # (M,) bool_（原地修改：非红外父死亡 → 失活）
+    eparent_kind: np.ndarray,  # (M,) int32 父实体类型 0=装甲 1=弹丸 2=无父
+    eparent_idx: np.ndarray,   # (M,) int32 父实体索引
+    eband: np.ndarray,         # (M,) int32 EmitterBand（0=RF 1=IR 2=LASER）
+    epower: np.ndarray,        # (M,) float32 额定强度（红外=充能目标值）
+    ecur: np.ndarray,          # (M,) float32 当前强度（红外充能/残热）
+    armor_pos: np.ndarray,     # (N, 3) float32
+    armor_active: np.ndarray,  # (N,) bool_
+    proj_pos: np.ndarray,      # (P, 3) float32
+    proj_active: np.ndarray,   # (P,) bool_
+) -> None:
+    """Numba 并行：辐射源位置同步自父实体 + 级联失效兜底。
+
+    - 父实体（装甲/弹丸）inactive → 非红外 emitter 立即失活（级联兜底，
+      Python 层漏关也会被清）；红外 emitter 保留（残热衰减交给 Python 层）。
+    - 红外：父存活 → 充能维持额定强度（cur_power = power_db）。
+    - 无父（激光漫反射光斑 kind=4）：位置固定，不参与 sync（SAL 系统管理存活）。
+    """
+    for i in prange(epos.shape[0]):
+        if not eactive[i]:
+            continue
+        pk = int(eparent_kind[i])
+        if pk == EMITTER_PARENT_ARMOR:  # 0 父 = 装甲
+            p = int(eparent_idx[i])
+            if p < 0 or not armor_active[p]:
+                if eband[i] != _BAND_IR:
+                    eactive[i] = False
+                continue  # 红外：交给 Python 层残热衰减
+            epos[i, 0] = armor_pos[p, 0]
+            epos[i, 1] = armor_pos[p, 1]
+            epos[i, 2] = armor_pos[p, 2]
+        elif pk == EMITTER_PARENT_PROJECTILE:  # 1 父 = 弹丸
+            p = int(eparent_idx[i])
+            if p < 0 or not proj_active[p]:
+                if eband[i] != _BAND_IR:
+                    eactive[i] = False
+                continue
+            epos[i, 0] = proj_pos[p, 0]
+            epos[i, 1] = proj_pos[p, 1]
+            epos[i, 2] = proj_pos[p, 2]
+        else:  # 2 无父（光斑）：位置固定，不参与 sync
+            continue
+        if eband[i] == _BAND_IR:
+            ecur[i] = epower[i]  # 红外：父存活 → 充能维持额定强度
+
+
+class EmitterPool:
+    """电磁辐射源池：射频 / 红外 / 激光统一管理（物理上都是电磁波，仅波段不同）。
+
+    数组布局:
+        pos         (N, 3) float32  世界位置（每 tick sync 自父实体）
+        power_db    (N,)   float32  额定发射强度（RF=dBm / 红外=额定热强度 / LASER=功率）
+        cur_power   (N,)   float32  当前强度（红外：充能/残热；主动 = power_db）
+        decay_per_s (N,)   float32  残热衰减速率（红外用，父死亡后指数衰减）
+        band        (N,)   int32    EmitterBand：0=射频 1=红外 2=激光
+        kind        (N,)   int32    0=平台雷达 1=主动导引头 2=激光照射器
+                                   3=红外辐射源 4=激光漫反射光斑
+        active      (N,)   bool_    是否在辐射（主动=开机；红外=cur_power≥检测阈值）
+        parent_kind (N,)   int32    父实体类型 0=装甲 1=弹丸 2=无父（光斑，不走 sync）
+        parent_idx  (N,)   int32    父实体索引
+        normal      (N, 3) float32  光斑法线（kind=4，目标表面法线，半球检测用）
+
+    生命周期三态（docs §2.2）：
+        activate(...)  从 _free_stack 弹索引，绑定父实体
+        deactivate(idx) 战术关机（保留索引，可 reactivate 重新开机）
+        级联失效        sync_from_parent 发现父实体 inactive → 主动辐射立即失活；
+                       红外停止充能、残热衰减后失活（索引归还 _free_stack）
+    """
+
+    IR_OFF_THRESHOLD = 0.05  # 红外残热低于此值 → 失活归还
+
+    def __init__(self, capacity: int = MAX_EMITTERS) -> None:
+        self.capacity = int(capacity)
+        self.pos = np.zeros((self.capacity, 3), dtype=np.float32)
+        self.power_db = np.zeros(self.capacity, dtype=np.float32)
+        self.cur_power = np.zeros(self.capacity, dtype=np.float32)
+        self.decay_per_s = np.zeros(self.capacity, dtype=np.float32)
+        self.band = np.zeros(self.capacity, dtype=np.int32)
+        self.kind = np.zeros(self.capacity, dtype=np.int32)
+        self.active = np.zeros(self.capacity, dtype=np.bool_)
+        self.parent_kind = np.zeros(self.capacity, dtype=np.int32)
+        self.parent_idx = np.full(self.capacity, -1, dtype=np.int32)
+        self.normal = np.zeros((self.capacity, 3), dtype=np.float32)
+        # 可用索引池：list 供 O(1) pop；set 供 O(1) 成员检查（sync 每帧遍历容量时
+        # 若用 `i in list` 是 O(n) 线性搜索 → 4096×4096 比较/帧，性能瓶颈）
+        self._free_stack: list[int] = list(range(self.capacity))
+        self._free_set: set[int] = set(range(self.capacity))
+        # 战术关机保留索引（deactivate 保留、reactivate 复用；级联失效不在此）
+        self._deactivated: set[int] = set()
+
+    # ------------------------------------------------------------------
+    # 激活
+    # ------------------------------------------------------------------
+
+    def _alloc(self) -> int:
+        if not self._free_stack:
+            self._expand()
+        idx = self._free_stack.pop()
+        self._free_set.discard(idx)
+        return idx
+
+    def activate(
+        self,
+        parent_kind: int,
+        parent_idx: int,
+        power_db: float,
+        band: int,
+        kind: int,
+        decay_per_s: float = 0.0,
+    ) -> int:
+        """从 free_stack 弹索引并绑定父实体（普通激活）。"""
+        idx = self._alloc()
+        self.parent_kind[idx] = int(parent_kind)
+        self.parent_idx[idx] = int(parent_idx)
+        self.power_db[idx] = float(power_db)
+        self.cur_power[idx] = float(power_db)
+        self.decay_per_s[idx] = float(decay_per_s)
+        self.band[idx] = int(band)
+        self.kind[idx] = int(kind)
+        self.active[idx] = True
+        self._deactivated.discard(idx)
+        return idx
+
+    def activate_from_projectile(
+        self,
+        proj_idx: int,
+        power_db: float,
+        band: int = EmitterBand.RF,
+        kind: int = EMITTER_KIND_SEEKER,
+    ) -> int:
+        """主动导引头 / 末敏弹毫米波扫描器：父实体 = 弹丸。"""
+        return self.activate(
+            EMITTER_PARENT_PROJECTILE, proj_idx, power_db, band, kind
+        )
+
+    def activate_ir(
+        self, armor_idx: int, ir_strength: float, decay_per_s: float = 0.2
+    ) -> int:
+        """绑定红外辐射源（band=IR, kind=3）：仅热辐射显著单位（docs §2.2）。
+
+        cur_power 从 0 开始，父存活时由 sync 内核充能到额定 ir_strength。
+        """
+        idx = self._alloc()
+        self.parent_kind[idx] = EMITTER_PARENT_ARMOR
+        self.parent_idx[idx] = int(armor_idx)
+        self.power_db[idx] = float(ir_strength)
+        self.cur_power[idx] = 0.0  # 从 0 充能
+        self.decay_per_s[idx] = float(decay_per_s)
+        self.band[idx] = _BAND_IR
+        self.kind[idx] = EMITTER_KIND_IR_SOURCE
+        self.active[idx] = True
+        self._deactivated.discard(idx)
+        return idx
+
+    def pulse(self, idx: int, peak_power: float) -> None:
+        """殉爆充能：一次性给红外源充大量能量（cur_power 瞬时拉高后按 decay 衰减）。
+
+        接入点 = Phase 3 既有 cookoff 判定（docs §2.2 陷阱 §八.17）。
+        """
+        if 0 <= idx < self.capacity and self.active[idx]:
+            self.cur_power[idx] = max(float(self.cur_power[idx]), float(peak_power))
+
+    def designate(
+        self,
+        target_pos: tuple[float, float, float] | np.ndarray,
+        power: float,
+        normal: tuple[float, float, float] = (0.0, 0.0, 1.0),
+        illum_idx: int = -1,
+    ) -> int:
+        """放置激光漫反射光斑（kind=4，无父，不走 sync）。
+
+        吊舱 LOS 射线检测后调用（docs §7.5）；光斑存活由 SAL 系统（Python 层）
+        每 tick 检查「吊舱 active 且 LOS 通」决定保留或 deactivate。
+        normal 存目标表面法线（半球漫反射：背面检测不到）。
+        """
+        idx = self._alloc()
+        self.parent_kind[idx] = EMITTER_PARENT_NONE
+        self.parent_idx[idx] = int(illum_idx)  # 记录来源照射器（sync 不消费）
+        self.power_db[idx] = float(power)
+        self.cur_power[idx] = float(power)
+        self.decay_per_s[idx] = 0.0
+        self.band[idx] = _BAND_LASER
+        self.kind[idx] = EMITTER_KIND_SPOT
+        self.pos[idx] = tuple(float(v) for v in target_pos)
+        self.normal[idx] = tuple(float(v) for v in normal)
+        self.active[idx] = True
+        self._deactivated.discard(idx)
+        return idx
+
+    # ------------------------------------------------------------------
+    # 战术关机（保留索引，可重新开机）
+    # ------------------------------------------------------------------
+
+    def deactivate(self, idx: int) -> None:
+        """战术关机（主动静默，如被 ARM 威胁）；保留索引可 reactivate。"""
+        if 0 <= idx < self.capacity:
+            self.active[idx] = False
+            self._deactivated.add(idx)
+
+    def reactivate(self, idx: int) -> None:
+        """重新开机（须是 deactivate 保留的索引）。"""
+        if 0 <= idx < self.capacity and idx in self._deactivated:
+            self.active[idx] = True
+            self._deactivated.discard(idx)
+
+    # ------------------------------------------------------------------
+    # 同步（每 tick 末调用：位置同步 + 级联失效 + 红外残热）
+    # ------------------------------------------------------------------
+
+    def _parent_alive(
+        self, idx: int, armor: ArmorPool, projectiles: ProjectilePool
+    ) -> bool:
+        pk = int(self.parent_kind[idx])
+        pi = int(self.parent_idx[idx])
+        if pk == EMITTER_PARENT_ARMOR:
+            return pi >= 0 and bool(armor.active[pi])
+        if pk == EMITTER_PARENT_PROJECTILE:
+            return pi >= 0 and bool(projectiles.active[pi])
+        return True  # 无父（光斑）：存活由 SAL 系统管理
+
+    def sync_from_parent(
+        self, armor: ArmorPool, projectiles: ProjectilePool, dt: float
+    ) -> None:
+        """位置同步 + 级联失效兜底 + 红外充能/残热衰减 + 归还 free_stack。"""
+        _sync_emitters_kernel(
+            self.pos, self.active, self.parent_kind, self.parent_idx,
+            self.band, self.power_db, self.cur_power,
+            armor.pos, armor.active,
+            projectiles.pos, projectiles.active,
+        )
+        freed: list[int] = []
+        for i in range(self.capacity):
+            if not self.active[i]:
+                # 战术关机保留索引；其余 inactive（级联失效/内核兜底）→ 归还
+                if i in self._deactivated or i in self._free_set:
+                    continue
+                freed.append(i)
+                continue
+            if self.band[i] == _BAND_IR and not self._parent_alive(i, armor, projectiles):
+                # 红外：父死亡 → 停止充能，残热指数衰减，低于阈值失活
+                self.cur_power[i] *= np.exp(-self.decay_per_s[i] * float(dt))
+                if self.cur_power[i] < self.IR_OFF_THRESHOLD:
+                    self.active[i] = False
+                    self._deactivated.discard(i)
+                    freed.append(i)
+        if freed:
+            self._free_stack.extend(freed)
+            self._free_set.update(freed)
+
+    # ------------------------------------------------------------------
+    # 查询
+    # ------------------------------------------------------------------
+
+    @property
+    def active_count(self) -> int:
+        return int(np.sum(self.active))
+
+    def active_indices(self) -> np.ndarray:
+        return np.flatnonzero(self.active)
+
+    # ------------------------------------------------------------------
+    # 扩容（Tick 间隙调用）
+    # ------------------------------------------------------------------
+
+    def _expand(self, factor: float = 2.0) -> None:
+        new_cap = max(int(self.capacity * factor), self.capacity + 1)
+
+        def _resize(old: np.ndarray, shape: tuple[int, ...]) -> np.ndarray:
+            new_arr = np.zeros(shape, dtype=old.dtype)
+            slices = tuple(slice(0, min(old.shape[i], shape[i])) for i in range(old.ndim))
+            new_arr[slices] = old[slices]
+            return new_arr
+
+        self.pos = _resize(self.pos, (new_cap, 3))
+        self.power_db = _resize(self.power_db, (new_cap,))
+        self.cur_power = _resize(self.cur_power, (new_cap,))
+        self.decay_per_s = _resize(self.decay_per_s, (new_cap,))
+        self.band = _resize(self.band, (new_cap,))
+        self.kind = _resize(self.kind, (new_cap,))
+        self.active = _resize(self.active, (new_cap,))
+        self.parent_kind = _resize(self.parent_kind, (new_cap,))
+        self.parent_idx = _resize(self.parent_idx, (new_cap,))
+        self.normal = _resize(self.normal, (new_cap, 3))
+
+        old_cap = self.capacity
+        self.capacity = new_cap
+        self._free_stack.extend(range(old_cap, new_cap))
+        self._free_set.update(range(old_cap, new_cap))

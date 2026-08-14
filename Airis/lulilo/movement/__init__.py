@@ -6,10 +6,15 @@
 """
 
 from Airis.lulilo.movement.integrate import (
+    build_armor_movement_hook,
     compute_speed,
     integrate_armor_movement,
+    integrate_armor_movement_3d,
     integrate_projectile_movement,
     integrate_single_armor,
+    resolve_contact_mesh_ids,
+    resolve_mesh_ids,
+    solve_suspension,
 )
 from Airis.lulilo.movement.nav import (
     _patch_astar,
@@ -29,8 +34,13 @@ __all__ = [
     "navgraph_astar",
     "compute_speed",
     "integrate_armor_movement",
+    "integrate_armor_movement_3d",
     "integrate_projectile_movement",
     "integrate_single_armor",
+    "solve_suspension",
+    "resolve_mesh_ids",
+    "resolve_contact_mesh_ids",
+    "build_armor_movement_hook",
     "_Pathfinder",
     "_funnel",
     "_patch_astar",

@@ -25,7 +25,12 @@ import msgpack
 import numpy as np
 
 from Airis.lulilo.core.logging import get_logger
-from Airis.lulilo.entities.pools import ArmorPool, BoxPool, ProjectilePool
+from Airis.lulilo.entities.pools import (
+    ArmorPool,
+    BoxPool,
+    EmitterPool,
+    ProjectilePool,
+)
 from Airis.lulilo.logistics.ammo import AmmoState, SupplyRequest
 from Airis.lulilo.logistics.fuel import FuelState
 from Airis.lulilo.simulation.state import SimulationState
@@ -87,6 +92,11 @@ def _restore_armor(data: dict) -> ArmorPool:
     pool = ArmorPool(capacity=cap)
     for name in ("pos", "half", "yaw", "health", "active", "wp", "wp_count", "wp_idx"):
         setattr(pool, name, decode_ndarray(data[name]))
+    # Phase 6b：rcs/ecm（旧存档缺失 → 保持构造默认）
+    if "rcs" in data:
+        pool.rcs = decode_ndarray(data["rcs"])
+    if "ecm" in data:
+        pool.ecm = decode_ndarray(data["ecm"])
     _rebuild_free_stack(pool, pool.active)
     return pool
 
@@ -100,12 +110,54 @@ def _restore_boxes(data: dict) -> BoxPool:
     return pool
 
 
+# Phase 6b 制导字段（docs/phase6-guidance-pipeline.md §2.5）
+_PROJECTILE_GUIDANCE_FIELDS = (
+    "guid_target_pos",
+    "guid_law",
+    "guid_nav_gain",
+    "guid_stage",
+    "guid_memory_pos",
+    "guid_comm",
+    "guid_confidence",
+    "guid_override",
+    "guid_search_fov_cos",
+    "guid_track_fov_cos",
+    "guid_filter_quality",
+)
+
+
 def _restore_projectiles(data: dict) -> ProjectilePool:
     cap = data["capacity"]
     pool = ProjectilePool(capacity=cap)
     for name in ("pos", "vel", "radius", "dmg", "kind", "active", "owner", "weapon", "ammo", "age"):
         setattr(pool, name, decode_ndarray(data[name]))
+    # Phase 6b：制导字段（旧存档缺失 → 保持构造默认）
+    for name in _PROJECTILE_GUIDANCE_FIELDS:
+        if name in data:
+            setattr(pool, name, decode_ndarray(data[name]))
     _rebuild_free_stack(pool, pool.active)
+    return pool
+
+
+def _restore_emitters(data: dict) -> EmitterPool:
+    cap = data["capacity"]
+    pool = EmitterPool(capacity=cap)
+    for name in (
+        "pos",
+        "power_db",
+        "cur_power",
+        "decay_per_s",
+        "band",
+        "kind",
+        "active",
+        "parent_kind",
+        "parent_idx",
+        "normal",
+    ):
+        setattr(pool, name, decode_ndarray(data[name]))
+    _rebuild_free_stack(pool, pool.active)
+    # 读档后无战术关机保留（级联失效语义由下一次 sync_from_parent 重建）
+    pool._deactivated = set()
     return pool
 
 
@@ -144,12 +196,13 @@ def serialize_battlefield(
     fuel: FuelState | None = None,
     ammo_requests: list[SupplyRequest] | None = None,
     fuel_requests: list[SupplyRequest] | None = None,
+    emitters: EmitterPool | None = None,
 ) -> bytes:
     """把战场全部可序列化状态打包为 msgpack bytes。
 
     Args:
         state: SimulationState（取 sim_time / tick_count）。
-        armor / boxes / projectiles: 各对象池（缺省从 state 读取）。
+        armor / boxes / projectiles / emitters: 各对象池（缺省从 state 读取）。
         ammo / fuel: 后勤状态（缺省从 state 读取）。
         ammo_requests / fuel_requests: 挂起补给请求（缺省为空）。
 
@@ -160,6 +213,9 @@ def serialize_battlefield(
     boxes = boxes or (state.box_pool if state.box_pool is not None else None)
     projectiles = projectiles or (
         state.projectile_pool if state.projectile_pool is not None else None
+    )
+    emitters = emitters or (
+        state.emitter_pool if state.emitter_pool is not None else None
     )
     ammo = ammo or (state.ammo.state if state.ammo is not None else None)
     fuel = fuel or (state.fuel.state if state.fuel is not None else None)
@@ -183,6 +239,9 @@ def serialize_battlefield(
                     "wp": armor.wp,
                     "wp_count": armor.wp_count,
                     "wp_idx": armor.wp_idx,
+                    # Phase 6b：电磁特征
+                    "rcs": armor.rcs,
+                    "ecm": armor.ecm,
                 }
             ),
         }
@@ -215,6 +274,36 @@ def serialize_battlefield(
                     "weapon": projectiles.weapon,
                     "ammo": projectiles.ammo,
                     "age": projectiles.age,
+                    # Phase 6b：制导字段
+                    "guid_target_pos": projectiles.guid_target_pos,
+                    "guid_law": projectiles.guid_law,
+                    "guid_nav_gain": projectiles.guid_nav_gain,
+                    "guid_stage": projectiles.guid_stage,
+                    "guid_memory_pos": projectiles.guid_memory_pos,
+                    "guid_comm": projectiles.guid_comm,
+                    "guid_confidence": projectiles.guid_confidence,
+                    "guid_override": projectiles.guid_override,
+                    "guid_search_fov_cos": projectiles.guid_search_fov_cos,
+                    "guid_track_fov_cos": projectiles.guid_track_fov_cos,
+                    "guid_filter_quality": projectiles.guid_filter_quality,
+                }
+            ),
+        }
+    if emitters is not None:
+        payload["emitters"] = {
+            "capacity": emitters.capacity,
+            **_pack_pool_arrays(
+                {
+                    "pos": emitters.pos,
+                    "power_db": emitters.power_db,
+                    "cur_power": emitters.cur_power,
+                    "decay_per_s": emitters.decay_per_s,
+                    "band": emitters.band,
+                    "kind": emitters.kind,
+                    "active": emitters.active,
+                    "parent_kind": emitters.parent_kind,
+                    "parent_idx": emitters.parent_idx,
+                    "normal": emitters.normal,
                 }
             ),
         }
@@ -248,6 +337,7 @@ class BattlefieldSave:
     armor: ArmorPool | None = None
     boxes: BoxPool | None = None
     projectiles: ProjectilePool | None = None
+    emitters: EmitterPool | None = None  # Phase 6b
     ammo: AmmoState | None = None
     fuel: FuelState | None = None
     ammo_requests: list[SupplyRequest] = field(default_factory=list)
@@ -259,6 +349,7 @@ class BattlefieldSave:
         st.armor_pool = self.armor
         st.box_pool = self.boxes
         st.projectile_pool = self.projectiles
+        st.emitter_pool = self.emitters
         st.ammo = self.ammo
         st.fuel = self.fuel
         return st
@@ -289,6 +380,8 @@ def deserialize_battlefield(data: bytes) -> BattlefieldSave:
         save.boxes = _restore_boxes(payload["boxes"])
     if "projectiles" in payload:
         save.projectiles = _restore_projectiles(payload["projectiles"])
+    if "emitters" in payload:
+        save.emitters = _restore_emitters(payload["emitters"])
     if "ammo" in payload:
         save.ammo = _restore_ammo(payload["ammo"])
     if "fuel" in payload:

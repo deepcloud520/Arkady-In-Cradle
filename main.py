@@ -17,13 +17,13 @@ def main():
 
     app = QApplication(sys.argv)
     window = MainWindow()
-    # 调试/演示：相机对准地图中心（默认地形为平坦演示地形，见 gl_widget._default_terrain）
+    # 调试/演示：相机对准战场区域（单位编队位于地图中央附近）
     hf = window.gl_widget.terrain.heightfield
     cam = window.gl_widget.camera
     cam.target = (hf.width * hf.cs * 0.5, hf.height * hf.cs * 0.5, 0.0)
-    cam.distance = hf.width * hf.cs * 1.2
+    cam.distance = 200.0
     cam.yaw = 45.0
-    cam.pitch = 30.0
+    cam.pitch = 40.0
     window.show()
     sys.exit(app.exec())
 

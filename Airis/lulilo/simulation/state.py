@@ -35,6 +35,7 @@ class SimulationState:
     armor_pool: Any = None
     box_pool: Any = None
     projectile_pool: Any = None
+    emitter_pool: Any = None  # Phase 6b 电磁辐射源池（可选装配）
 
     ammo: Any = None
     fuel: Any = None
@@ -50,6 +51,7 @@ class SimulationState:
                 "armor": self.armor_pool,
                 "box": self.box_pool,
                 "projectile": self.projectile_pool,
+                "emitter": self.emitter_pool,
             },
             logistics={
                 "ammo": self.ammo,

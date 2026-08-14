@@ -59,12 +59,12 @@ logs/
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                    叙 事 层（UI + 剧情）                 │
-│  消费模拟状态，不控制模拟流程                           │
+│  消费模拟状态，不控制模拟流程                             │
 └─────────────────────────┬───────────────────────────────┘
                           │ Simulation.get_state()
 ┌─────────────────────────▼───────────────────────────────┐
 │                   仿 真 引 擎（无头模式）                 │
-│  Tick-based外循环 + 事件驱动内循环                      │
+│  Tick-based外循环 + 事件驱动内循环                        │
 └─────────────────────────┬───────────────────────────────┘
                           │
         ┌─────────────────┼─────────────────┐
@@ -385,9 +385,13 @@ core → coordinates → terrain → entities → movement → detection → com
 | 1 | 坐标/地形/环境模块 | 3周 | ✅ 已完成（2026-08-09） |
 | 2 | 实体/移动/检测模块 | 4周 | ✅ 已完成（2026-08-11） |
 | 3 | 战斗/后勤/模拟循环 | 4周 | ✅ 已完成（2026-08-11） |
-| 4 | 叙事层集成 | 3周 | 未开始 |
-| 5 | UI 集成与主题商店 | 3周 | 未开始 |
+| 4 | 叙事层集成 | 3周 | 🔄 骨架已实现（2026-08-12；4b UI 暂缓） |
+| 5 | UI 集成与主题商店 | 3周 | 🔄 进行中（5a 管线骨架完成 2026-08-13；5b 面板待办） |
 | 6 | 完整场景与测试套件 | 2周 | 未开始 |
+
+> 📌 **Phase 6b（导弹制导，独立于上表 Phase 6）**：制导律脚本化 + 电子战闭环 + 末敏弹——
+> 制导管线已实施 ✅（2026-08-14，docs/phase6-guidance-pipeline.md 步骤 1~7，全量 346 测试全绿）；
+> 末敏弹扫描（`combat/sfm.py`）与激光制导炸弹（`combat/sal.py`）待实施。
 
 ---
 
@@ -527,12 +531,12 @@ core → coordinates → terrain → entities → movement → detection → com
 
 #### Phase 5：UI（3周）
 
-**目标**：完整的玩家界面 + 视觉主题切换。
+**目标**：完整的玩家界面 +。
 
 **任务清单**：
-- [ ] 实现 `ui/main_window.py`（QMainWindow 主窗口布局）
-- [ ] 实现 `ui/views.py`（战术地图、对话面板、档案库）
-- [ ] 实现至少 3 个主题：构成主义、日系动漫
+- [ ] 实现 `ui/main_window.py`（QMainWindow 主窗口布局，包括“选择测试地图生成器”）
+- [ ] 实现 `ui/views.py`（战术地图、对话面板（仅预留骨架，UI细节留以后）、档案库（仅预留骨架，UI细节留以后））
+- [ ] 实现至少 3 个shader主题：构成主义、日系动漫
 - [ ] 实现 `ui/shaders/` 目录管理（每个主题独立的 .frag 文件）
 - [ ] 实现 `ui/controls.py`（鼠标/键盘事件 → 叙事/命令队列）
 - [ ] 实现自由摄像机的 UI 控制（拖动、滚轮、旋转）
@@ -583,7 +587,7 @@ core → coordinates → terrain → entities → movement → detection → com
 - [ ] 准备多种弹头（红外/雷达AAM，激光AGM，反辐射，自由落体/滑翔炸弹）
 
 #### Phase 8：数据链体系作战（待补）
-1. 参考：stochastic-warfare设计数据链，以数据链良好/观测良好实现战争迷雾
+1. 参考：stochastic-warfare设计数据链，以数据链良好/观测良好实现战争迷雾（参考：docs\数据链与战争迷雾设计.md）
 2. 对原有AI进行全面升级：
     装甲部队：呼叫支援（友方陆军/炮兵/巡飞弹/CAS），态势感知分析规划作战目标
     炮兵：自主接受友军请求打击指令并规避反炮
@@ -598,6 +602,12 @@ core → coordinates → terrain → entities → movement → detection → com
 | Qt FBO上下文丢失（最小化/拖动） | `detect_framebuffer()` 返回None时强制绑定Qt FBO |
 | moderngl在QOpenGLWidget中渲染全黑 | 必须用 moderngl 官方 `fb.use()` 绑定 Qt FBO：`fb = ctx.detect_framebuffer(); fb.use()` 后再 `ctx.clear()` + `vao.render()`。直接 `ctx.clear()` 用的是 create_context 时缓存的 C 层 `mglo.fbo`，与实际 GL 绑定不同步，渲染会落到错误缓冲（原始 `glBindFramebuffer` 也能救，但非库内标准做法） |
 | 并行碰撞写入同一装甲地址 | Numba原子操作（`-=` 自动安全），或结果数组暂存后串行提交 |
+| 实例化渲染只画前几个实例 | moderngl 实例 buffer 的 format 必须加 `/i` 后缀（divisor=1）；缺省是 per-vertex，实例数据会被当顶点连续读取（源码 `FormatIterator::info()` + 官方 buffer_format.rst 确认） |
+| 主题切换后地形变黑 | 菜单槽触发时 GL context 非 current，编译 program/重建 VAO/写 uniform 会静默失败 → 用 `makeCurrent()` 包裹 `ThemeManager.switch()` 及回调里的全部 GL 操作 |
+| 主题切回时报 InvalidObject | `ThemeManager.switch` 释放旧 program 后必须移出缓存（`self._themes.pop(old.id, None)`），否则切回时复用已释放的 program |
+| glm 矩阵转 numpy 用 `to_list()` 转置错乱 | **PyGLM 与 numpy 布局规则不同**：`mat4.to_list()` 返回 **4 个列向量**（非扁平数组），`np.array(to_list()).reshape(4,4, order='F')` 形状已是 (4,4) 属 no-op → 矩阵被转置 → 投影/渲染坐标错乱（HUD 圆全重合、clip_w 差 500 倍）。**必须用 `np.frombuffer(mat.to_bytes(), dtype=np.float32).reshape(4,4, order='F')`**（与 GL uniform 写入完全一致的 column-major 扁平，已验证与 glm 乘法逐元素一致）。注意 identity 矩阵转置不变 → 单测测不出，须配非 identity 相机投影对比测试 |
+| HUD 标记低角度被地形剔除 | HUD pass 期间 `ctx.disable(DEPTH_TEST)`（标记永远最上层），画完 finally 恢复；HUD 顶点 z=0 深度 ~0.5，GL_LESS 下近处地形（深度<0.5）会把标记剔除 |
+| 改 Numba 核后出现诡异报错（缓存与代码不一致） | 项目全量使用 `@njit(cache=True)`，改动签名/常量或升级 Numba 后旧缓存会静默失效。**每次修改任何 Numba 核后必须运行一次** `uv run python clear_numba_cache.py -y` 再跑测试 |
 
 
 ## 七、常用命令
@@ -622,6 +632,11 @@ uv run python -m tests.benchmark_phase2
 
 # 无头性能测试（Phase 3 碰撞）
 uv run python -m tests.benchmark_collision
+
+# 清除 Numba 缓存（.nbc/.nbi）——每次改 Numba 核后必须运行一次
+uv run python clear_numba_cache.py -y      # 直接清（跳过确认）
+uv run python clear_numba_cache.py -n      # 只预览，不删除
+uv run python clear_numba_cache.py --all   # 连同 .pyc 一起清
 ```
 
 
@@ -633,7 +648,7 @@ uv run python -m tests.benchmark_collision
 ## 九、非代码目录
 - `story/` —— Obsidian 世界观笔记（中文 markdown），非源码
 - `assets/shaders/`、`assets/textures/` —— 预留，当前为空
-- `docs/` —— 项目实现的技术细节文档（`heightfield-design.md`、`phase3-combat-design.md`）
+- `docs/` —— 项目实现的技术细节文档（`heightfield-design.md`、`phase3-combat-design.md`、`phase4-narrative-design.md`、`phase5-ui-pipeline-design.md`、`phase6-guidance-design.md`、`phase6-guidance-pipeline.md`、`数据链与战争迷雾设计.md`）
 - `Reference/` —— 参考数据与外部项目（武器数据库 CSV、参考实现）
 
 
