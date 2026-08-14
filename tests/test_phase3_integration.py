@@ -104,10 +104,15 @@ def spawn_tank(
     idx = armor.spawn(
         x, y, 0.0,
         half_x=1.5, half_y=3.0, half_z=1.0,
-        yaw=yaw, health=health,
+        yaw=yaw,
     )
     for part, hx, hy, hz, lx, ly, lz in (parts or DEFAULT_PARTS):
-        boxes.spawn(idx, int(part), hx, hy, hz, lx, ly, lz)
+        bidx = boxes.spawn(idx, int(part), hx, hy, hz, lx, ly, lz)
+        if int(part) == int(PartType.HULL):
+            # HULL 初始血量（docs/part-health-design.md §2.3）
+            boxes.hp[bidx] = health
+            boxes.hp_max[bidx] = health
+            armor.bind_hull(idx, bidx)
     boxes.sync_all_from_parent(armor)
     fc.set_unit_config(
         idx,
@@ -129,6 +134,11 @@ def drain_kinds(events: EventBus) -> dict[str, int]:
     for e in events.drain():
         counts[e.kind] = counts.get(e.kind, 0) + 1
     return counts
+
+
+def hull_health(armor, boxes, idx) -> float:
+    """读取整车血量（HULL 部位血，docs/part-health-design.md §三）。"""
+    return float(boxes.hp[armor.hull_idx[idx]])
 
 
 # ===========================================================================
@@ -227,9 +237,9 @@ class TestEngagement:
         )
         rec = fc.fire(m1, t90)
         assert rec is not None
-        before = float(armor.health[t90])
+        before = hull_health(armor, boxes, t90)
         fc.tick(1.0)  # 0.32s 内到达 → 命中
-        after = float(armor.health[t90])
+        after = hull_health(armor, boxes, t90)
         assert after < before
         counts = drain_kinds(fc.events)
         assert counts["hit"] >= 1
@@ -247,9 +257,9 @@ class TestEngagement:
             armor_mm=900.0, armor_type=int(ArmorType.COMPOSITE),
         )
         fc.fire(m1, thick)
-        before = float(armor.health[thick])
+        before = hull_health(armor, boxes, thick)
         fc.tick(1.0)
-        dmg = before - float(armor.health[thick])
+        dmg = before - hull_health(armor, boxes, thick)
         assert 0.0 < dmg <= 15.0  # 未击穿微降（design doc §4.3）
 
     def test_ricochet_branch_keeps_projectile(self, monkeypatch) -> None:
@@ -274,7 +284,7 @@ class TestEngagement:
         fc.tick(1.0)
         counts = drain_kinds(fc.events)
         assert counts["ricochet"] >= 1
-        assert armor.health[target] == pytest.approx(100.0)  # 跳弹不毁伤
+        assert hull_health(armor, boxes, target) == pytest.approx(100.0)  # 跳弹不毁伤
         assert not fc.can_fire(m1)  # 冷却中，说明确实发射过
 
     def test_health_destroy_multiple_hits(self) -> None:
@@ -446,7 +456,7 @@ class TestMultiRateLoop:
         fc.fire(m1, t90)
         loop.run_headless(3.0, dt=1.0)  # 3 个地面 Tick，每 Tick 内部子弹细分
         assert loop.state.sim_time == pytest.approx(3.0)
-        assert armor.health[t90] < 100.0  # 命中扣血
+        assert hull_health(armor, boxes, t90) < 100.0  # 命中扣血
         assert fc.pending_projectiles() == 0
 
 
@@ -494,7 +504,7 @@ class TestSerialization:
         # 装甲数组逐元素一致
         assert save.armor is not None
         np.testing.assert_array_equal(save.armor.pos, armor.pos)
-        np.testing.assert_array_equal(save.armor.health, armor.health)
+        np.testing.assert_array_equal(save.armor.hull_idx, armor.hull_idx)
         np.testing.assert_array_equal(save.armor.active, armor.active)
         np.testing.assert_array_equal(save.armor.yaw, armor.yaw)
         np.testing.assert_array_equal(save.armor.wp, armor.wp)
@@ -502,6 +512,8 @@ class TestSerialization:
         # 碰撞箱 / 弹丸
         np.testing.assert_array_equal(save.boxes.pos, boxes.pos)
         np.testing.assert_array_equal(save.boxes.active, boxes.active)
+        np.testing.assert_array_equal(save.boxes.hp, boxes.hp)
+        np.testing.assert_array_equal(save.boxes.hp_max, boxes.hp_max)
         np.testing.assert_array_equal(save.projectiles.pos, projectiles.pos)
         np.testing.assert_array_equal(save.projectiles.active, projectiles.active)
 
@@ -524,8 +536,9 @@ class TestSerialization:
 
         assert save.armor is not None
         assert not save.armor.active[t90]          # 摧毁状态保留
-        np.testing.assert_array_equal(save.armor.health, armor.health)
+        np.testing.assert_array_equal(save.armor.hull_idx, armor.hull_idx)
         np.testing.assert_array_equal(save.boxes.active, boxes.active)
+        np.testing.assert_array_equal(save.boxes.hp, boxes.hp)
         np.testing.assert_array_equal(save.ammo.reserve, ammo.state.reserve)
 
         # 读档后可继续跑（不崩溃，active 语义正确）

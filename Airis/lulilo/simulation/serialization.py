@@ -29,6 +29,8 @@ from Airis.lulilo.entities.pools import (
     ArmorPool,
     BoxPool,
     EmitterPool,
+    PART_MAX_HP,
+    PartType,
     ProjectilePool,
 )
 from Airis.lulilo.logistics.ammo import AmmoState, SupplyRequest
@@ -103,7 +105,7 @@ _ARMOR_AI_FIELDS = (
 def _restore_armor(data: dict) -> ArmorPool:
     cap = data["capacity"]
     pool = ArmorPool(capacity=cap)
-    for name in ("pos", "half", "yaw", "health", "active", "wp", "wp_count", "wp_idx"):
+    for name in ("pos", "half", "yaw", "hull_idx", "active", "wp", "wp_count", "wp_idx"):
         setattr(pool, name, decode_ndarray(data[name]))
     # Phase 6b：rcs/ecm（旧存档缺失 → 保持构造默认）
     if "rcs" in data:
@@ -123,8 +125,36 @@ def _restore_boxes(data: dict) -> BoxPool:
     pool = BoxPool(capacity=cap)
     for name in ("local", "pos", "half", "parent", "part", "active"):
         setattr(pool, name, decode_ndarray(data[name]))
+    # 部位血量（docs/part-health-design.md §2.1）；旧存档缺失 → 按部位重建满血
+    if "hp" in data and "hp_max" in data:
+        pool.hp = decode_ndarray(data["hp"])
+        pool.hp_max = decode_ndarray(data["hp_max"])
+    else:
+        _rebuild_part_hp(pool)
     _rebuild_free_stack(pool, pool.active)
     return pool
+
+
+def _rebuild_part_hp(pool: BoxPool) -> None:
+    """旧档兼容：按部位重建满血（docs/part-health-design.md §2.3）。"""
+    pool.hp = np.zeros(pool.hp.shape, dtype=np.float32)
+    pool.hp_max = np.zeros(pool.hp_max.shape, dtype=np.float32)
+    for i in range(pool.capacity):
+        if pool.active[i]:
+            m = PART_MAX_HP.get(int(pool.part[i]), 100.0)
+            pool.hp[i] = m
+            pool.hp_max[i] = m
+
+
+def _rebuild_hull_bindings(armor: ArmorPool, boxes: BoxPool) -> None:
+    """旧档兼容：为每个活跃装甲重建 HULL box 索引绑定（docs/part-health-design.md §2.2）。"""
+    for aidx in np.flatnonzero(armor.active):
+        if armor.hull_idx[aidx] >= 0:
+            continue
+        mask = boxes.active & (boxes.parent == aidx) & (boxes.part == int(PartType.HULL))
+        idxs = np.flatnonzero(mask)
+        if idxs.size:
+            armor.hull_idx[aidx] = int(idxs[0])
 
 
 # Phase 6b 制导字段（docs/phase6-guidance-pipeline.md §2.5）
@@ -251,7 +281,7 @@ def serialize_battlefield(
                     "pos": armor.pos,
                     "half": armor.half,
                     "yaw": armor.yaw,
-                    "health": armor.health,
+                    "hull_idx": armor.hull_idx,
                     "active": armor.active,
                     "wp": armor.wp,
                     "wp_count": armor.wp_count,
@@ -282,6 +312,8 @@ def serialize_battlefield(
                     "parent": boxes.parent,
                     "part": boxes.part,
                     "active": boxes.active,
+                    "hp": boxes.hp,
+                    "hp_max": boxes.hp_max,
                 }
             ),
         }
@@ -404,6 +436,9 @@ def deserialize_battlefield(data: bytes) -> BattlefieldSave:
         save.armor = _restore_armor(payload["armor"])
     if "boxes" in payload:
         save.boxes = _restore_boxes(payload["boxes"])
+    # 旧档兼容：armor.hull_idx 缺失 → 从 box 池重建 HULL 绑定
+    if save.armor is not None and save.boxes is not None:
+        _rebuild_hull_bindings(save.armor, save.boxes)
     if "projectiles" in payload:
         save.projectiles = _restore_projectiles(payload["projectiles"])
     if "emitters" in payload:

@@ -6,7 +6,7 @@
 
 设计要点（docs §七.1/§七.2）：
     - 池是纯 SoA 数据结构（本模块不 import combat/engagement，被其调用）
-    - 结算 = Numba 批量内核（球形/破片锥区域毁伤 O(E×N)，原地扣 armor.health）
+    - 结算 = Numba 批量内核（球形/破片锥区域毁伤 O(E×N)，原地扣 HULL 部位血）
       + Python 逐事件顶级毁伤（锥形/细锥直接目标，由 FiringControl._resolve_top_attack 处理）
     - 爆炸数据（drain_explosions）与伤害结算解耦：submit 时记录，渲染层随时消费
     - 扩容只在 Tick 间隙触发（同 ArmorPool._expand 惯例）
@@ -63,16 +63,17 @@ def resolve_area_damage(
     frag_count: np.ndarray,    # (E,) int32 破片数（本阶段确定性结算，不逐破片随机）
     active: np.ndarray,        # (E,) bool_ 事件活跃掩码
     armor_pos: np.ndarray,     # (N, 3) float32 装甲位置
-    armor_health: np.ndarray,  # (N,) float32 装甲血量（原地修改，下限 0）
+    box_hp: np.ndarray,        # (B,) float32 碰撞箱血量（区域毁伤只扣 HULL 部位；原地修改，下限 0）
+    armor_hull_idx: np.ndarray,  # (N,) int32 每装甲的 HULL box 索引（-1 无 → 跳过）
     armor_active: np.ndarray,  # (N,) bool_ 装甲存活掩码
 ) -> None:
-    """批量区域毁伤结算（O(E×N)，docs §七.2）。
+    """批量区域毁伤结算（O(E×N)，docs §七.2 + part-health-design.md §三）。
 
     - SPHERE：d ≤ radius 的装甲受 base × (1 - d/radius) 线性衰减毁伤
     - FRAG_CONE：锥内（与 direction 夹角 ≤ cone_angle 且距离 ≤ radius）装甲受
       frag_dmg × (1 - d/radius) 毁伤（确定性，不逐破片采样）
-    直接原地扣 armor.health（下限 0）；摧毁/部位毁伤由调用方 Python 层补
-    （FiringControl._finalize_area_kills）。
+    直接原地扣 HULL 部位血（经 armor_hull_idx 索引 box_hp，下限 0）；
+    摧毁/部位毁伤由调用方 Python 层补（FiringControl._finalize_area_kills）。
     """
     e = active.shape[0]
     n = armor_pos.shape[0]
@@ -90,6 +91,9 @@ def resolve_area_damage(
             for j in range(n):
                 if not armor_active[j]:
                     continue
+                hj = armor_hull_idx[j]
+                if hj < 0:
+                    continue
                 dx = armor_pos[j, 0] - cx
                 dy = armor_pos[j, 1] - cy
                 dz = armor_pos[j, 2] - cz
@@ -98,8 +102,8 @@ def resolve_area_damage(
                     continue
                 d = np.sqrt(d2)
                 factor = 1.0 - d / r
-                hp = armor_health[j] - base * factor
-                armor_health[j] = hp if hp > 0.0 else 0.0
+                hp = box_hp[hj] - base * factor
+                box_hp[hj] = hp if hp > 0.0 else 0.0
         elif k == _DK_FRAG_CONE:
             cx = center[i, 0]
             cy = center[i, 1]
@@ -114,6 +118,9 @@ def resolve_area_damage(
             for j in range(n):
                 if not armor_active[j]:
                     continue
+                hj = armor_hull_idx[j]
+                if hj < 0:
+                    continue
                 vx = armor_pos[j, 0] - cx
                 vy = armor_pos[j, 1] - cy
                 vz = armor_pos[j, 2] - cz
@@ -125,8 +132,8 @@ def resolve_area_damage(
                 if cos_a < cos_half:
                     continue
                 factor = 1.0 - d / r
-                hp = armor_health[j] - frag * factor
-                armor_health[j] = hp if hp > 0.0 else 0.0
+                hp = box_hp[hj] - frag * factor
+                box_hp[hj] = hp if hp > 0.0 else 0.0
 
 
 class DamageSubmissionPool:

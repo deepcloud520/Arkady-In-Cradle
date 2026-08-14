@@ -506,9 +506,11 @@ class TriggerSystem:
         pool = state.pools.get("armor") if hasattr(state, "pools") else None
         if pool is None:
             return False
+        box = state.pools.get("box") if hasattr(state, "pools") else None
         active = pool.active
-        health = pool.health
-        return bool(((health / 100.0) < threshold).sum() if False else (active & (health < threshold * 100.0)).any())
+        # 整车血量 = HULL 部位血（docs/part-health-design.md §三；哨兵槽 -1 → 0 安全）
+        health = box.hp[pool.hull_idx] if box is not None else np.zeros(pool.capacity, dtype=np.float32)
+        return bool(active & (health < threshold * 100.0)).any()
 
     @staticmethod
     def _armor_count(state: Any, threshold: Any) -> int:

@@ -618,7 +618,7 @@ class TestGuidanceSerialization:
                 **_pack_pool_arrays(
                     {
                         "pos": armor.pos, "half": armor.half, "yaw": armor.yaw,
-                        "health": armor.health, "active": armor.active,
+                        "hull_idx": armor.hull_idx, "active": armor.active,
                         "wp": armor.wp, "wp_count": armor.wp_count, "wp_idx": armor.wp_idx,
                     }
                 ),

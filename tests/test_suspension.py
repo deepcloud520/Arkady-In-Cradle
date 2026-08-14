@@ -224,7 +224,7 @@ class TestBoxPitchRoll:
         armor = ArmorPool(capacity=4)
         aidx = armor.spawn(
             x=10.0, y=20.0, z=5.0, half_x=2.0, half_y=3.0, half_z=1.0,
-            yaw=0.5, health=100.0,
+            yaw=0.5,
         )
         armor.pitch[aidx] = 0.3
         armor.roll[aidx] = 0.2

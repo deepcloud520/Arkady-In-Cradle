@@ -44,6 +44,18 @@ class PartType(IntEnum):
     AMMO_RACK = 4  # 弹药架
 
 
+# 部位满血表（docs/part-health-design.md §2.3）。
+# HULL=100 接替原 armor.health 默认值 → AI/触发器阈值语义不变；
+# 其余部位按功能重要度递减（炮塔/引擎/履带/弹药架）。
+PART_MAX_HP: dict[int, float] = {
+    int(PartType.HULL): 100.0,
+    int(PartType.TURRET): 60.0,
+    int(PartType.ENGINE): 50.0,
+    int(PartType.TRACK): 40.0,
+    int(PartType.AMMO_RACK): 25.0,
+}
+
+
 class ProjectileType(IntEnum):
     """抛射物类型。"""
     BULLET = 0   # 动能弹（APFSDS/AP）
@@ -92,7 +104,8 @@ class ArmorPool:
         pos       (N, 3) float32  中心位置 (x, y, z)
         half      (N, 3) float32  碰撞箱半边长
         yaw       (N,)   float32  朝向角 (rad)
-        health    (N,)   float32  当前血量
+        hull_idx  (N,)   int32    该装甲的 HULL 碰撞箱索引（-1 未绑定；
+                                  血量权威来源 = BoxPool.hp，见 docs/part-health-design.md）
         active    (N,)   bool_    存活掩码
         wp        (N, 8, 2) float32  路径拐点（世界坐标）
         wp_count  (N,)   uint8    拐点数量
@@ -114,7 +127,7 @@ class ArmorPool:
         self.pos = np.zeros((self.capacity, 3), dtype=np.float32)
         self.half = np.zeros((self.capacity, 3), dtype=np.float32)
         self.yaw = np.zeros(self.capacity, dtype=np.float32)
-        self.health = np.zeros(self.capacity, dtype=np.float32)
+        self.hull_idx = np.full(self.capacity, -1, dtype=np.int32)  # HULL box 索引（-1 未绑定）
         self.active = np.zeros(self.capacity, dtype=np.bool_)
 
         # 路径系统
@@ -167,7 +180,7 @@ class ArmorPool:
         half_y: float = 3.0,
         half_z: float = 1.0,
         yaw: float = 0.0,
-        health: float = 100.0,
+        hull_idx: int = -1,
         mesh_id: int = -1,
         rcs: float = 50.0,
         ecm: float = 0.0,
@@ -181,7 +194,7 @@ class ArmorPool:
             x, y, z: 世界坐标。
             half_x, half_y, half_z: 碰撞箱半边长。
             yaw: 朝向角 (rad)。
-            health: 初始血量。
+            hull_idx: HULL 碰撞箱索引（-1 未绑定；创建 HULL box 后调用 bind_hull 填入）。
             mesh_id: 所在表面面片 ID（WorldMesh；-1=空中/未绑定，
                 随后由 z 同步自动定位）。
             rcs: 雷达截面积 (m²，反射特性)。
@@ -193,7 +206,7 @@ class ArmorPool:
         self.pos[idx] = (x, y, z)
         self.half[idx] = (half_x, half_y, half_z)
         self.yaw[idx] = yaw
-        self.health[idx] = health
+        self.hull_idx[idx] = int(hull_idx)
         self.active[idx] = True
         self.mesh_id[idx] = int(mesh_id)
         self.pitch[idx] = 0.0
@@ -223,7 +236,15 @@ class ArmorPool:
     def destroy(self, idx: int) -> None:
         """销毁装甲（标记 inactive，归还索引）。"""
         self.active[idx] = False
+        self.hull_idx[idx] = -1
         self._free_stack.append(idx)
+
+    def bind_hull(self, armor_idx: int, box_idx: int) -> None:
+        """绑定该装甲的 HULL 碰撞箱索引（docs/part-health-design.md §2.2）。
+
+        创建 HULL box 后调用；血量权威来源 = BoxPool.hp[box_idx]。
+        """
+        self.hull_idx[armor_idx] = int(box_idx)
 
     # ------------------------------------------------------------------
     # 路径设置
@@ -273,7 +294,7 @@ class ArmorPool:
         self.pos = _resize(self.pos, (new_cap, 3))
         self.half = _resize(self.half, (new_cap, 3))
         self.yaw = _resize(self.yaw, (new_cap,))
-        self.health = _resize(self.health, (new_cap,))
+        self.hull_idx = _resize(self.hull_idx, (new_cap,))
         self.active = _resize(self.active, (new_cap,))
         self.wp = _resize(self.wp, (new_cap, 8, 2))
         self.wp_count = _resize(self.wp_count, (new_cap,))
@@ -304,6 +325,7 @@ class ArmorPool:
         self.comm[old_cap:] = 1.0
         self.contact_age[old_cap:] = 1e9
         self.formation_id[old_cap:] = -1
+        self.hull_idx[old_cap:] = -1
         self.rcs[old_cap:] = 50.0  # 既有遗留：rcs 构造默认 50.0（非零）
 
         self.capacity = new_cap
@@ -474,23 +496,30 @@ class BoxPool:
     每辆装甲车由 2~6 个碰撞箱组成（车体/炮塔/引擎/履带/弹药架）。
     碰撞箱位置为世界坐标（由装甲 pos + yaw 变换后写入）。
 
-    数组布局:
+    数组布局（注意：实际分配 capacity+1，末位为哨兵槽，docs/part-health-design.md §2.1）:
         pos       (N, 3) float32  世界坐标
         half      (N, 3) float32  局部半边长（在装甲局部坐标系中为 AABB）
         parent    (N,)   int32    所属装甲索引
         part      (N,)   int32    部位类型（PartType 枚举）
         active    (N,)   bool_    存活掩码
+        hp        (N,)   float32  当前部位血量（哨兵槽恒 0）
+        hp_max    (N,)   float32  部位满血（spawn 时按 part 设定）
     """
 
     def __init__(self, capacity: int = MAX_BOXES) -> None:
         self.capacity = int(capacity)
+        # 哨兵槽：分配 capacity+1，末位（index==capacity）恒 hp=0、active=False、不进 free_stack。
+        # armor.hull_idx=-1 时 fancy indexing boxes.hp[hull_idx] 读出哨兵 0，避免负索引垃圾值。
+        alloc = capacity + 1
 
-        self.local = np.zeros((self.capacity, 3), dtype=np.float32)  # 局部偏移（权威）
-        self.pos = np.zeros((self.capacity, 3), dtype=np.float32)    # 世界坐标（sync 后）
-        self.half = np.zeros((self.capacity, 3), dtype=np.float32)
-        self.parent = np.full(self.capacity, -1, dtype=np.int32)
-        self.part = np.zeros(self.capacity, dtype=np.int32)
-        self.active = np.zeros(self.capacity, dtype=np.bool_)
+        self.local = np.zeros((alloc, 3), dtype=np.float32)  # 局部偏移（权威）
+        self.pos = np.zeros((alloc, 3), dtype=np.float32)    # 世界坐标（sync 后）
+        self.half = np.zeros((alloc, 3), dtype=np.float32)
+        self.parent = np.full(alloc, -1, dtype=np.int32)
+        self.part = np.zeros(alloc, dtype=np.int32)
+        self.active = np.zeros(alloc, dtype=np.bool_)
+        self.hp = np.zeros(alloc, dtype=np.float32)
+        self.hp_max = np.zeros(alloc, dtype=np.float32)
 
         self._free_stack: list[int] = list(range(self.capacity))
 
@@ -532,12 +561,16 @@ class BoxPool:
         self.local[idx] = (local_x, local_y, local_z)
         self.pos[idx] = (local_x, local_y, local_z)
         self.active[idx] = True
+        self.hp[idx] = PART_MAX_HP.get(int(part), 100.0)
+        self.hp_max[idx] = self.hp[idx]
         return idx
 
     def destroy(self, idx: int) -> None:
         """销毁碰撞箱。"""
         self.active[idx] = False
         self.parent[idx] = -1
+        self.hp[idx] = 0.0
+        self.hp_max[idx] = 0.0
         self._free_stack.append(idx)
 
     # ------------------------------------------------------------------
@@ -598,6 +631,7 @@ class BoxPool:
 
     def _expand(self, factor: float = 2.0) -> None:
         new_cap = max(int(self.capacity * factor), self.capacity + 1)
+        alloc = new_cap + 1  # 哨兵槽维持 capacity+1
 
         def _resize(old: np.ndarray, shape: tuple[int, ...]) -> np.ndarray:
             new_arr = np.zeros(shape, dtype=old.dtype)
@@ -605,12 +639,14 @@ class BoxPool:
             new_arr[slices] = old[slices]
             return new_arr
 
-        self.local = _resize(self.local, (new_cap, 3))
-        self.pos = _resize(self.pos, (new_cap, 3))
-        self.half = _resize(self.half, (new_cap, 3))
-        self.parent = _resize(self.parent, (new_cap,))
-        self.part = _resize(self.part, (new_cap,))
-        self.active = _resize(self.active, (new_cap,))
+        self.local = _resize(self.local, (alloc, 3))
+        self.pos = _resize(self.pos, (alloc, 3))
+        self.half = _resize(self.half, (alloc, 3))
+        self.parent = _resize(self.parent, (alloc,))
+        self.part = _resize(self.part, (alloc,))
+        self.active = _resize(self.active, (alloc,))
+        self.hp = _resize(self.hp, (alloc,))
+        self.hp_max = _resize(self.hp_max, (alloc,))
 
         old_cap = self.capacity
         self.capacity = new_cap

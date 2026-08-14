@@ -155,6 +155,7 @@ class FormationAI:
         formations: FormationAIPool,
         *,
         fc: Any | None = None,    # FiringControl（开火接口，None=不可开火）
+        boxes: Any | None = None,  # BoxPool（读 HULL 部位血；None 时回退 fc.boxes）
         pathfinder: GraphPathfinder | None = None,
         contact_provider: Callable[[], list[Contact]] | None = None,
         events: Any | None = None,
@@ -162,9 +163,23 @@ class FormationAI:
         self.armor = armor
         self.formations = formations
         self.fc = fc
+        self.boxes = boxes
         self.pathfinder = pathfinder
         self._contact_provider = contact_provider
         self.events = events
+
+    def _hull_hp(self, i: int) -> float:
+        """某装甲整车血量（HULL 部位血；未绑定 HULL 或无可读池 → 0）。
+
+        docs/part-health-design.md：血量权威来源 = BoxPool.hp，armor.hull_idx 是指针。
+        """
+        hj = int(self.armor.hull_idx[i])
+        if hj < 0:
+            return 0.0
+        boxes = self.fc.boxes if self.fc is not None else self.boxes
+        if boxes is None:
+            return 0.0
+        return float(boxes.hp[hj])
 
     # ------------------------------------------------------------------
     # Hook 入口（每 1s 地面 Tick）
@@ -210,7 +225,7 @@ class FormationAI:
                     team=int(a.team[i]),
                     x=float(a.pos[i, 0]),
                     y=float(a.pos[i, 1]),
-                    health=float(a.health[i]),
+                    health=self._hull_hp(int(i)),
                 )
             )
         return contacts
@@ -222,7 +237,7 @@ class FormationAI:
     def _situation_of(self, fidx: int) -> FormationSituation:
         members = self._members_of(fidx)
         n = len(members)
-        health_sum = sum(float(self.armor.health[i]) for i in members)
+        health_sum = sum(self._hull_hp(i) for i in members)
         return FormationSituation(
             friendly_active=n,
             enemy_contacts=len(self.formations.contact_set[fidx] or []),
@@ -345,7 +360,7 @@ class FormationAI:
         if int(self.formations.intent[fidx]) != int(FormationIntent.ADVANCE):
             return
         for m in self._members_of(fidx):
-            if float(self.armor.health[m]) < self.HIT_DEFENSE_HEALTH * _DEFAULT_MAX_HEALTH:
+            if self._hull_hp(m) < self.HIT_DEFENSE_HEALTH * _DEFAULT_MAX_HEALTH:
                 self.armor.order[m] = int(UnitOrder.DEFEND)
 
     # ------------------------------------------------------------------
@@ -466,7 +481,7 @@ class FormationAI:
     def _self_preserve(self, i: int) -> None:
         """简单自保：血量过低 → 撤退；否则对最近威胁还击（不主动进攻）。"""
         a = self.armor
-        if float(a.health[i]) < self.SELF_PRESERVE_HEALTH * _DEFAULT_MAX_HEALTH:
+        if self._hull_hp(i) < self.SELF_PRESERVE_HEALTH * _DEFAULT_MAX_HEALTH:
             self._move_retreat(i)
             return
         threat = self._nearest_enemy(i)

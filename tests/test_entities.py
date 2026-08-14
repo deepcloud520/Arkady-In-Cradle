@@ -48,7 +48,7 @@ class TestArmorPool:
         idx = pool.spawn(0, 0, 0)
         assert pool.half[idx, 0] == pytest.approx(1.0)
         assert pool.half[idx, 1] == pytest.approx(3.0)
-        assert pool.health[idx] == pytest.approx(100.0)
+        assert pool.hull_idx[idx] == -1  # 未绑定 HULL box（part-health-design.md §2.2）
         assert pool.yaw[idx] == pytest.approx(0.0)
 
     def test_destroy_releases_index(self, pool: ArmorPool) -> None:

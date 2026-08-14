@@ -181,7 +181,7 @@ class MainWindow(QMainWindow):
                 aidx = armor.spawn(
                     x=wx, y=wy, z=_ground_z(wx, wy),
                     half_x=1.5, half_y=3.0, half_z=0.8,
-                    yaw=yaw, health=100.0,
+                    yaw=yaw,
                 )
                 armor.side[aidx] = side
                 # 后勤演示数据（Phase 5 DetailPanel 级别 0/2 显示）
@@ -193,8 +193,9 @@ class MainWindow(QMainWindow):
                 if first < 0:
                     first = aidx
                 # 车体 + 炮塔两个碰撞箱（Phase 3 部位毁伤演示）
-                box.spawn(aidx, int(PartType.HULL), 1.5, 3.0, 0.8,
-                          local_x=0.0, local_y=0.0, local_z=0.0)
+                hull_b = box.spawn(aidx, int(PartType.HULL), 1.5, 3.0, 0.8,
+                                   local_x=0.0, local_y=0.0, local_z=0.0)
+                armor.bind_hull(aidx, hull_b)  # 绑定 HULL box（part-health-design.md §2.2）
                 box.spawn(aidx, int(PartType.TURRET), 1.2, 1.2, 0.7,
                           local_x=0.0, local_y=0.0, local_z=0.6)
             return first

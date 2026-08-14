@@ -169,7 +169,11 @@ class WorldAdapter:
             armor_yaw=armor.yaw,
             armor_pitch=pitch,
             armor_roll=roll,
-            armor_health=armor.health,
+            armor_health=(
+                box.hp[armor.hull_idx]  # 哨兵槽：-1 → 0，安全（part-health-design.md §2.1）
+                if box is not None
+                else np.zeros(n, dtype=np.float32)
+            ),
             armor_active=armor.active,
             armor_confidence=np.ones(n, dtype=np.float32),   # 上帝视角
             armor_status=np.zeros(n, dtype=np.uint8),         # 全 ACTIVE

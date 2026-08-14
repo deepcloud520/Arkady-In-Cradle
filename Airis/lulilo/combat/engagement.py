@@ -126,6 +126,10 @@ PART_ARMOR_FACTOR: dict[int, float] = {
     int(PartType.AMMO_RACK): 0.5,
 }
 
+# 弹药殉爆爆炸参数（docs/part-health-design.md §四：小范围大威力）
+COOKOFF_RADIUS = 8.0        # 殉爆爆炸半径 (m)
+COOKOFF_STRENGTH = 300.0    # 殉爆中心毁伤量（本车 HULL=100 必归零 → 摧毁）
+
 
 @dataclass
 class UnitCombatConfig:
@@ -144,6 +148,9 @@ class UnitCombatConfig:
     weapon_condition: float = 1.0           # 武器状况 [0,1]
     max_range_m: float = 4000.0             # 有效射程
     fire_rate_rpm: float | None = None      # 覆盖武器射速（None 用武器定义）
+    # 弹药殉爆威力乘数（docs/part-health-design.md §四泄压阀 blow-out panel 预留）
+    # 默认 1.0 = 殉爆必毁本车；<1 未来实现泄压：本车可能不殉爆（HULL 不归零）
+    ammo_cookoff_power_mult: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -648,20 +655,30 @@ class FiringControl:
             rng_u=self.rng.uniform(),
         )
         if not result["ricochet"]:
-            health = float(self.armor.health[armor_idx]) - float(result["health_dmg"])
-            self.armor.health[armor_idx] = max(0.0, health)
+            health_dmg = float(result["health_dmg"])
             if result["margin"] > 0:
                 part = self._resolve_top_part(armor_idx)
-                self._apply_part_damage(armor_idx, part, result["cookoff"])
-            if result["cookoff"] or self.armor.health[armor_idx] <= 0.0:
-                self._destroy_armor(
-                    armor_idx, cause=cause if result["cookoff"] else "health"
-                )
+                self._apply_part_damage(armor_idx, part, health_dmg, result["cookoff"])
+            else:
+                # 未击穿（攻顶穿过薄弱区但未击穿）：结构震荡扣 HULL
+                self._subtract_hull_health(armor_idx, health_dmg)
+            if self._hull_health(armor_idx) <= 0.0:
+                self._destroy_armor(armor_idx, cause="health")
         return result
 
     def _resolve_top_part(self, armor_idx: int) -> int:
-        """攻顶命中部位：顶部投影 → 简化取最近 box（docs §7.3 fallback 分支）。"""
+        """攻顶命中部位：顶部投影 → 优先车体 HULL（顶部主装甲），无 HULL 时取最近 box。
+
+        注：攻顶武器（EFP/ATGM 攻顶）打的是车体顶部主装甲，HULL 是确定且合理的
+        默认；避免等距 box 顺序不确定（可能命中 AMMO_RACK 触发意外殉爆）。
+        docs/part-health-design.md §三。
+        """
         b = self.boxes
+        # 优先活跃 HULL box
+        if np.any(
+            b.active & (b.parent == armor_idx) & (b.part == int(PartType.HULL))
+        ):
+            return int(PartType.HULL)
         ax = float(self.armor.pos[armor_idx, 0])
         ay = float(self.armor.pos[armor_idx, 1])
         az = float(self.armor.pos[armor_idx, 2])
@@ -794,7 +811,8 @@ class FiringControl:
                 pool.frag_count,
                 pool.active,
                 self.armor.pos,
-                self.armor.health,
+                self.boxes.hp,          # 区域毁伤只扣 HULL 部位血（part-health-design.md §三）
+                self.armor.hull_idx,
                 self.armor.active,
             )
 
@@ -821,9 +839,11 @@ class FiringControl:
         pool.clear()
 
     def _finalize_area_kills(self) -> None:
-        """区域毁伤后清理：health<=0 的装甲走既有销毁路径（事件/级联/后勤）。"""
+        """区域毁伤后清理：HULL 血量归零的装甲走既有销毁路径（事件/级联/后勤）。"""
         a = self.armor
-        low = a.active & (a.health <= 0.0)
+        b = self.boxes
+        hull_hp = b.hp[a.hull_idx]  # 哨兵槽：-1 → 读出 0，安全
+        low = a.active & (hull_hp <= 0.0)
         for idx in np.flatnonzero(low):
             self._destroy_armor(int(idx), cause="blast")
 
@@ -1204,16 +1224,17 @@ class FiringControl:
             )
             return  # 跳弹：弹丸继续飞行（保留动能），本次不造成毁伤
 
-        # 结构损伤累积
-        health = float(self.armor.health[armor_idx]) - float(result["health_dmg"])
-        self.armor.health[armor_idx] = max(0.0, health)
-
+        # 结构损伤累积（part-health-design.md §三）：击穿扣命中部位血，未击穿扣 HULL
+        health_dmg = float(result["health_dmg"])
         penetrated = result["margin"] > 0
         if penetrated:
-            self._apply_part_damage(armor_idx, part, result["cookoff"])
+            self._apply_part_damage(armor_idx, part, health_dmg, result["cookoff"])
+        else:
+            self._subtract_hull_health(armor_idx, health_dmg)
 
-        if result["cookoff"] or self.armor.health[armor_idx] <= 0.0:
-            self._destroy_armor(armor_idx, cause="cookoff" if result["cookoff"] else "health")
+        # 摧毁判据：HULL 归零（殉爆走爆炸池，由 _finalize_area_kills 统一结算）
+        if self._hull_health(armor_idx) <= 0.0:
+            self._destroy_armor(armor_idx, cause="health")
 
         # Phase 6c 步骤③：爆炸/破片弹药（HE_FRAG/SAPHEI 等）→ 提交池（§七.3）
         # 即使目标被击毁也爆炸（HE 杀伤链：穿透 + 爆破并存）
@@ -1254,27 +1275,74 @@ class FiringControl:
                     frag_count=int(ammo.frag_count),
                 )
 
-    def _apply_part_damage(self, armor_idx: int, part: int, cookoff: bool) -> None:
-        """击穿后的部位毁伤（box 失活映射，design doc §5.3）。
+    def _apply_part_damage(
+        self, armor_idx: int, part: int, health_dmg: float, cookoff: bool
+    ) -> None:
+        """击穿后的部位毁伤（docs/part-health-design.md §三/§四）。
 
-        AMMO_RACK 被击穿：直接殉爆秒杀（cookoff 已由 resolver 判定）。
-        TURRET / ENGINE / TRACK：失活对应 box（失去开火 / 机动 / 减速）。
+        扣命中部位血量（health_dmg，15~50/发）；归零 → 失活对应 box
+        （TURRET 失去开火 / ENGINE 失去机动 / TRACK 减速）。
+        AMMO_RACK：血归零 或 cookoff 掷骰命中 → 殉爆（向爆炸池提交小范围大威力
+        爆炸，不再直接秒杀本车；泄压阀由 ammo_cookoff_power_mult 预留）。
         """
         b = self.boxes
         mask = b.active & (b.parent == armor_idx) & (b.part == part)
         idxs = np.flatnonzero(mask)
         if idxs.size:
-            b.active[idxs] = False
-            for bi in idxs:
-                self.boxes._free_stack.append(int(bi))
-            # 失活后 parent 清空（防止误用）
-            b.parent[idxs] = -1
+            hp = b.hp[idxs] - health_dmg
+            b.hp[idxs] = np.maximum(hp, 0.0)
+            dead = b.hp[idxs] <= 0.0
+            dead_idxs = idxs[dead]
+            if dead_idxs.size:
+                b.active[dead_idxs] = False
+                b.parent[dead_idxs] = -1
+                self.boxes._free_stack.extend(dead_idxs.tolist())
+        # 殉爆：AMMO_RACK 血归零 或 cookoff 掷骰命中
+        if part == int(PartType.AMMO_RACK) and (
+            cookoff or (idxs.size > 0 and np.any(b.hp[idxs] <= 0.0))
+        ):
+            self._trigger_cookoff(armor_idx)
+
+    def _trigger_cookoff(self, armor_idx: int) -> None:
+        """弹药殉爆：向爆炸池提交小范围大威力爆炸（docs/part-health-design.md §四）。
+
+        Tick 末 _resolve_damage_pool 统一结算：本车 HULL 归零 → 摧毁，
+        半径内单位受波及（体现殉爆波及友军）。
+        泄压阀（ammo_cookoff_power_mult < 1）未来可让本车不殉爆。
+        """
+        if self.damage_pool is None:
+            self._destroy_armor(armor_idx, cause="cookoff")
+            return
+        pos = self.armor.pos[armor_idx]
+        cfg = self._configs.get(armor_idx)
+        mult = float(cfg.ammo_cookoff_power_mult) if cfg is not None else 1.0
+        self.damage_pool.submit_damage(
+            kind=DamageKind.SPHERE,
+            center=(float(pos[0]), float(pos[1]), float(pos[2])),
+            radius=COOKOFF_RADIUS,
+            pen_mm=COOKOFF_STRENGTH * mult,
+            target_idx=armor_idx,
+        )
+        self.events.emit("cookoff", {"armor_idx": armor_idx})
+
+    def _hull_health(self, armor_idx: int) -> float:
+        """该装甲整车血量（HULL 部位血；未绑定 HULL → 0）。"""
+        hj = int(self.armor.hull_idx[armor_idx])
+        return float(self.boxes.hp[hj]) if hj >= 0 else 0.0
+
+    def _subtract_hull_health(self, armor_idx: int, dmg: float) -> None:
+        """未击穿结构震荡：扣 HULL 部位血（下限 0）。"""
+        hj = int(self.armor.hull_idx[armor_idx])
+        if hj >= 0:
+            self.boxes.hp[hj] = max(0.0, float(self.boxes.hp[hj]) - dmg)
 
     def _destroy_armor(self, armor_idx: int, cause: str = "destroyed") -> None:
-        """摧毁装甲：health 清零 + 失活所有 box + 弹药/燃料 release + 事件。"""
+        """摧毁装甲：HULL 血清零 + 失活所有 box + 弹药/燃料 release + 事件。"""
         if not self.armor.active[armor_idx]:
             return
-        self.armor.health[armor_idx] = 0.0
+        hj = int(self.armor.hull_idx[armor_idx])
+        if hj >= 0:
+            self.boxes.hp[hj] = 0.0
         self.armor.destroy(armor_idx)
 
         # Phase 6b：级联关闭该装甲的主动 emitter（红外除外，走残热）

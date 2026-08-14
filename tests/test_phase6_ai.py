@@ -35,6 +35,10 @@ _SIMPLE_PARTS = [
     (PartType.TURRET, 1.0, 1.2, 0.6, 0.0, 0.0, 0.6),
 ]
 
+# 纯 AI 测试共享的 HULL 血量池（docs/part-health-design.md §2.2；
+# 装甲经 _spawn_tank 建 HULL box，AI 经注入 boxes 读血）
+_AI_BOXES = BoxPool(capacity=512)
+
 
 def _spawn_tank(
     armor: ArmorPool,
@@ -44,12 +48,18 @@ def _spawn_tank(
     team: int = 0,
     formation_id: int = -1,
     health: float = 100.0,
+    create_hull: bool = True,
 ) -> int:
     idx = armor.spawn(
         x, y, 0.0,
         half_x=1.5, half_y=3.0, half_z=1.0,
-        health=health, team=team, formation_id=formation_id,
+        team=team, formation_id=formation_id,
     )
+    if create_hull:
+        bidx = _AI_BOXES.spawn(idx, int(PartType.HULL), 1.5, 3.0, 1.0, 0.0, 0.0, 0.0)
+        _AI_BOXES.hp[bidx] = health
+        _AI_BOXES.hp_max[bidx] = health
+        armor.bind_hull(idx, bidx)
     return idx
 
 
@@ -65,9 +75,17 @@ def _spawn_combat_tank(
     formation_id: int = -1,
     health: float = 100.0,
 ) -> int:
-    idx = _spawn_tank(armor, x, y, team=team, formation_id=formation_id, health=health)
+    idx = _spawn_tank(
+        armor, x, y, team=team, formation_id=formation_id,
+        health=health, create_hull=False,
+    )
     for part, hx, hy, hz, lx, ly, lz in _SIMPLE_PARTS:
-        boxes.spawn(idx, int(part), hx, hy, hz, lx, ly, lz)
+        bidx = boxes.spawn(idx, int(part), hx, hy, hz, lx, ly, lz)
+        if int(part) == int(PartType.HULL):
+            # HULL 初始血量（docs/part-health-design.md §2.3）
+            boxes.hp[bidx] = health
+            boxes.hp_max[bidx] = health
+            armor.bind_hull(idx, bidx)
     boxes.sync_all_from_parent(armor)
     fc.set_unit_config(
         idx,
@@ -78,7 +96,7 @@ def _spawn_combat_tank(
 
 
 def _make_ai(armor: ArmorPool, formations: FormationAIPool, events=None, fc=None) -> FormationAI:
-    return FormationAI(armor, formations, fc=fc, events=events)
+    return FormationAI(armor, formations, fc=fc, boxes=_AI_BOXES, events=events)
 
 
 def _make_loop(armor: ArmorPool, formations: FormationAIPool) -> SimulationLoop:
@@ -372,4 +390,4 @@ class TestLoopIntegration:
             loop.step(1.0)
 
         # 敌至少被命中过（血量下降）或仍有弹丸飞行
-        assert armor.health[e] < 100.0 or projectiles.active_count > 0
+        assert boxes.hp[armor.hull_idx[e]] < 100.0 or projectiles.active_count > 0

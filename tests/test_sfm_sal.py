@@ -47,7 +47,7 @@ from tests.test_guidance_pipeline import (
     make_guided_registry,
     spawn_at,
 )
-from tests.test_phase3_integration import make_battlefield
+from tests.test_phase3_integration import hull_health, make_battlefield
 
 # ---------------------------------------------------------------------------
 # 测试辅助
@@ -254,8 +254,13 @@ def test_sfm_scan_hovers_and_detonates() -> None:
     fc._sfm_scan()
     # 命中 → 弹丸销毁
     assert not fc.projectiles.active[proj]
-    # 装甲受毁伤（顶甲 = 600×0.3 = 180mm < efp 200mm → 击穿）
-    assert fc.armor.health[t] < 100.0 or not fc.armor.active[t]
+    # 装甲受毁伤（顶甲 = 600×0.3 = 180mm < efp 200mm → 击穿，命中部位受损或摧毁）
+    damaged = any(
+        float(fc.boxes.hp[bi]) < float(fc.boxes.hp_max[bi])
+        for bi in range(fc.boxes.capacity)
+        if fc.boxes.active[bi] and fc.boxes.parent[bi] == t
+    )
+    assert damaged or not fc.armor.active[t]
     kinds = [e.kind for e in fc.events.drain()]
     assert "sfm_detonate" in kinds
 
@@ -273,7 +278,7 @@ def test_sfm_efp_needs_penetration() -> None:
     fc._sfm_scan()
     assert not fc.projectiles.active[proj]
     # 未击穿：health 只有微小结构损伤（未击穿封顶 min(15, ...)）
-    assert fc.armor.health[t] >= 85.0
+    assert hull_health(fc.armor, fc.boxes, t) >= 85.0
 
 
 def test_sfm_scan_timeout_self_destruct() -> None:

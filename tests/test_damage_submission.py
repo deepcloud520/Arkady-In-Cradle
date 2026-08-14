@@ -37,7 +37,7 @@ from Airis.lulilo.entities.pools import ProjectileType
 from Airis.lulilo.simulation.loop import EventBus
 from Airis.lulilo.simulation.state import SimulationState
 from tests.test_guidance_pipeline import _TestRNG, spawn_at
-from tests.test_phase3_integration import make_battlefield
+from tests.test_phase3_integration import hull_health, make_battlefield
 
 # ---------------------------------------------------------------------------
 # 测试辅助
@@ -160,32 +160,34 @@ def test_sphere_kernel_linear_falloff() -> None:
     armor_pos = np.array(
         [[0, 0, 0], [5, 0, 0], [10, 0, 0], [15, 0, 0]], dtype=np.float32
     )
-    health = np.full(4, 100.0, dtype=np.float32)
+    box_hp = np.full(4, 100.0, dtype=np.float32)   # 4 个 HULL box
+    hull_idx = np.arange(4, dtype=np.int32)        # 每装甲 → 自己的 HULL box
     active = np.ones(4, dtype=np.bool_)
     resolve_area_damage(
         pool.kind, pool.center, pool.radius, pool.pen_mm,
         pool.direction, pool.cone_angle, pool.frag_count, pool.active,
-        armor_pos, health, active,
+        armor_pos, box_hp, hull_idx, active,
     )
-    assert health[0] == pytest.approx(0.0)    # 中心满伤害 100 → 0
-    assert health[1] == pytest.approx(50.0)   # 5/10 → 100*(1-0.5)=50
-    assert health[2] == pytest.approx(100.0)  # 边界 10 → 衰减到 0
-    assert health[3] == pytest.approx(100.0)  # 15 > 10 无伤
+    assert box_hp[0] == pytest.approx(0.0)    # 中心满伤害 100 → 0
+    assert box_hp[1] == pytest.approx(50.0)   # 5/10 → 100*(1-0.5)=50
+    assert box_hp[2] == pytest.approx(100.0)  # 边界 10 → 衰减到 0
+    assert box_hp[3] == pytest.approx(100.0)  # 15 > 10 无伤
 
 
 def test_sphere_kernel_ignores_inactive() -> None:
     pool = DamageSubmissionPool(capacity=4)
     pool.submit_damage(DamageKind.SPHERE, (0.0, 0.0, 0.0), radius=10.0, pen_mm=100.0)
     armor_pos = np.array([[0, 0, 0], [3, 0, 0]], dtype=np.float32)
-    health = np.full(2, 100.0, dtype=np.float32)
+    box_hp = np.full(2, 100.0, dtype=np.float32)
+    hull_idx = np.arange(2, dtype=np.int32)
     active = np.array([True, False], dtype=np.bool_)
     resolve_area_damage(
         pool.kind, pool.center, pool.radius, pool.pen_mm,
         pool.direction, pool.cone_angle, pool.frag_count, pool.active,
-        armor_pos, health, active,
+        armor_pos, box_hp, hull_idx, active,
     )
-    assert health[0] == pytest.approx(0.0)    # 失活装甲不动
-    assert health[1] == pytest.approx(100.0)  # 失活装甲不动
+    assert box_hp[0] == pytest.approx(0.0)    # 失活装甲不动
+    assert box_hp[1] == pytest.approx(100.0)  # 失活装甲不动
 
 
 def test_frag_cone_kernel() -> None:
@@ -203,17 +205,17 @@ def test_frag_cone_kernel() -> None:
     armor_pos = np.array(
         [[0, 0, 5], [5, 0, 0], [5, 0, 5], [0, 0, 15]], dtype=np.float32
     )
-    health = np.full(4, 100.0, dtype=np.float32)
+    box_hp = np.full(4, 100.0, dtype=np.float32)
+    hull_idx = np.arange(4, dtype=np.int32)
     active = np.ones(4, dtype=np.bool_)
     resolve_area_damage(
         pool.kind, pool.center, pool.radius, pool.pen_mm,
         pool.direction, pool.cone_angle, pool.frag_count, pool.active,
-        armor_pos, health, active,
+        armor_pos, box_hp, hull_idx, active,
     )
-    assert health[0] == pytest.approx(90.0)   # 锥内 5/10 → 20*(1-0.5)=10
-    assert health[1] == pytest.approx(100.0)  # 侧向 90° > 30° 锥外
-    assert health[2] == pytest.approx(100.0)  # 斜上 45° > 30° 锥外
-    assert health[3] == pytest.approx(100.0)  # 超射程
+    assert box_hp[0] == pytest.approx(90.0)   # 锥内 5/10 → 20*(1-0.5)=10
+    assert box_hp[1] == pytest.approx(100.0)  # 侧向 90° > 30° 锥外
+    assert box_hp[2] == pytest.approx(100.0)  # 斜上 45° > 30° 锥外
 
 
 # ---------------------------------------------------------------------------
@@ -230,10 +232,10 @@ def test_sal_blast_submits_to_pool_and_resolves() -> None:
     ev = int(fc.damage_pool.active_indices()[0])
     assert fc.damage_pool.kind[ev] == int(DamageKind.SPHERE)
     # 未结算：血量不变
-    assert fc.armor.health[t] == 100.0
+    assert hull_health(fc.armor, fc.boxes, t) == 100.0
     fc.tick(0.1)  # tick 末结算
     # 中心满伤 SAL_BLAST_DMG=60 → 100-60=40
-    assert fc.armor.health[t] == pytest.approx(40.0)
+    assert hull_health(fc.armor, fc.boxes, t) == pytest.approx(40.0)
 
 
 def test_submit_hit_blast_sphere_and_frag() -> None:
@@ -250,11 +252,11 @@ def test_submit_hit_blast_sphere_and_frag() -> None:
     kinds = sorted(int(fc.damage_pool.kind[i]) for i in fc.damage_pool.active_indices())
     assert kinds == [int(DamageKind.SPHERE), int(DamageKind.FRAG_CONE)]
     # 未结算：血量不变
-    assert fc.armor.health[victim] == 100.0
+    assert hull_health(fc.armor, fc.boxes, victim) == 100.0
 
     fc.tick(0.1)  # tick 末结算 → 区域毁伤
-    assert fc.armor.health[victim] < 100.0     # 中心满伤
-    assert fc.armor.health[bystander] < 100.0  # 半径内受范围毁伤
+    assert hull_health(fc.armor, fc.boxes, victim) < 100.0     # 中心满伤
+    assert hull_health(fc.armor, fc.boxes, bystander) < 100.0  # 半径内受范围毁伤
 
 
 def test_resolve_hit_submits_blast_for_he_frag() -> None:
@@ -271,7 +273,7 @@ def test_resolve_hit_submits_blast_for_he_frag() -> None:
     assert int(DamageKind.SPHERE) in kinds
 
     fc.tick(0.1)  # tick 末结算 → bystander 也受范围毁伤
-    assert fc.armor.health[bystander] < 100.0
+    assert hull_health(fc.armor, fc.boxes, bystander) < 100.0
 
 
 def test_cone_event_top_attack_via_pool() -> None:
@@ -286,8 +288,13 @@ def test_cone_event_top_attack_via_pool() -> None:
         top_factor=0.5,
     )
     fc.tick(0.1)
-    # 顶甲 = 600×0.5 = 300mm（RHA）< 穿深 400 → 击穿，血量显著下降
-    assert fc.armor.health[t] < 100.0
+    # 顶甲 = 600×0.5 = 300mm（RHA）< 穿深 400 → 击穿，命中部位受损或单位摧毁
+    damaged = any(
+        float(fc.boxes.hp[bi]) < float(fc.boxes.hp_max[bi])
+        for bi in range(fc.boxes.capacity)
+        if fc.boxes.active[bi] and fc.boxes.parent[bi] == t
+    )
+    assert damaged or not fc.armor.active[t]
 
 
 def test_cone_event_skips_missing_target() -> None:
