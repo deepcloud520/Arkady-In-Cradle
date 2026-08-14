@@ -6,8 +6,11 @@
 **This is a fanfic work of Neurosama and Neuroverse.**
 
 ## Develop
+
 *Arkady in Cradle* is still in a early-developing version.please deploy it by uv.
+
 **Current Status**: Phase 6/10 (Ground Forces) in progress — 2048 armour + 16k projectiles supported. Air & Data‑Link phases planned.
+
 ---
 Specially thanks: **Neurosama**
 
