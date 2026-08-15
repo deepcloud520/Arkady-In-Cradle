@@ -124,7 +124,7 @@ class TestArmorPool:
     def test_spawn_ai_fields_defaults(self, pool: ArmorPool) -> None:
         """spawn 后 AI 字段默认值应正确（未编队/无目标/通信满）。"""
         idx = pool.spawn(0, 0, 0)
-        assert pool.team[idx] == 0
+        assert pool.side[idx] == 0
         assert pool.role[idx] == 0
         assert pool.order[idx] == 0
         assert pool.target_idx[idx] == -1
@@ -135,17 +135,17 @@ class TestArmorPool:
 
     def test_spawn_ai_fields_args(self, pool: ArmorPool) -> None:
         """spawn 可显式传 AI 字段。"""
-        idx = pool.spawn(10, 20, 0.0, team=1, role=4, formation_id=3)
-        assert pool.team[idx] == 1
+        idx = pool.spawn(10, 20, 0.0, side=1, role=4, formation_id=3)
+        assert pool.side[idx] == 1
         assert pool.role[idx] == 4
         assert pool.formation_id[idx] == 3
         assert pool.target_idx[idx] == -1  # 其余保持默认
 
     def test_ai_fields_expand(self, pool: ArmorPool) -> None:
         """扩容时 AI 字段应同步扩容且保留旧数据。"""
-        idx = pool.spawn(0, 0, 0, team=1, role=4, formation_id=3)
+        idx = pool.spawn(0, 0, 0, side=1, role=4, formation_id=3)
         pool._expand(factor=2.0)
-        assert pool.team.shape[0] == MAX_ARMOR * 2
+        assert pool.side.shape[0] == MAX_ARMOR * 2
         assert pool.role.shape[0] == MAX_ARMOR * 2
         assert pool.order.shape[0] == MAX_ARMOR * 2
         assert pool.target_idx.shape[0] == MAX_ARMOR * 2
@@ -154,12 +154,12 @@ class TestArmorPool:
         assert pool.contact_age.shape[0] == MAX_ARMOR * 2
         assert pool.formation_id.shape[0] == MAX_ARMOR * 2
         # 旧数据保留
-        assert pool.team[idx] == 1
+        assert pool.side[idx] == 1
         assert pool.role[idx] == 4
         assert pool.formation_id[idx] == 3
         # 新扩容区保持默认
         assert pool.formation_id[MAX_ARMOR] == -1
-        assert pool.team[MAX_ARMOR] == 0
+        assert pool.side[MAX_ARMOR] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -305,7 +305,7 @@ class TestFormationAIPool:
         """spawn 应登记编队并设置默认值。"""
         idx = pool.spawn()
         assert pool.active[idx]
-        assert pool.team[idx] == 0
+        assert pool.side[idx] == 0
         assert pool.role[idx] == 0
         assert pool.intent[idx] == 0
         assert pool.order[idx] == 0
@@ -316,8 +316,8 @@ class TestFormationAIPool:
 
     def test_spawn_args(self, pool: FormationAIPool) -> None:
         """spawn 可显式传阵营/角色/目标区。"""
-        idx = pool.spawn(team=1, role=2, target_zone=(100.0, 200.0, 5.0))
-        assert pool.team[idx] == 1
+        idx = pool.spawn(side=1, role=2, target_zone=(100.0, 200.0, 5.0))
+        assert pool.side[idx] == 1
         assert pool.role[idx] == 2
         assert pool.target_zone[idx].tolist() == [100.0, 200.0, 5.0]
 
@@ -343,12 +343,12 @@ class TestFormationAIPool:
     def test_expand_preserves_data(self) -> None:
         """扩容应同步数组并保留旧数据。"""
         pool = FormationAIPool(capacity=2)
-        idx = pool.spawn(team=1, role=4, target_zone=(1.0, 2.0, 3.0))
+        idx = pool.spawn(side=1, role=4, target_zone=(1.0, 2.0, 3.0))
         pool.spawn()
         pool.spawn()  # 触发扩容 2→4
         assert pool.capacity == 4
         assert pool.active_count == 3
-        assert pool.team[idx] == 1
+        assert pool.side[idx] == 1
         assert pool.role[idx] == 4
         assert pool.target_zone[idx].tolist() == [1.0, 2.0, 3.0]
         assert len(pool.contact_set) == 4

@@ -163,6 +163,8 @@ class AmmoConfig(BaseModel):
     frag_dmg: float = 0.0                 # 单破片伤害；>0 时提交破片锥事件
     frag_count: int = 0                   # 破片数（破片锥参数；本阶段确定性结算）
     fuse_delay: float = 0.0               # 引信延迟 (s)：SAPHEI 穿后延迟引爆（预留，本阶段 0）
+    # ---- Phase 7 空战（docs/phase7-air-pipeline.md §7.3）----
+    prox_fuse_radius: float = 0.0         # 近炸引信半径 (m)：>0 时 AAM/SAM 与飞机相对距离 < 半径 → 近炸起爆
 
     model_config = {"extra": "forbid"}
 
@@ -395,6 +397,42 @@ class WeaponRegistry:
                     muzzle_velocity=1140.0,
                     projectile_type=ProjectileType.MISSILE,
                     is_heat=True,
+                ),
+            ],
+        )
+        # ---- Phase 6c 步骤⑤：炮兵（docs/phase6-ai-pipeline.md §六）----
+        # M109A6 155mm 自行榴弹炮：曲射弹药（HE_FRAG 球形爆破 + 破片锥，经提交池结算）。
+        # max_range_m=15000 受 PROJECTILE_MAX_AGE=20s 约束（T(15km)≈18.3s < 20s）；
+        # 超出 WORLD_BOUND 的飞行由 _recycle_stale 对 indirect 弹丸豁免（弹道必落点）。
+        reg.register_definition(
+            WeaponConfig(
+                weapon_id="m109_155mm",
+                name="M109A6 155mm 自行榴弹炮",
+                category=WeaponCategory.HOWITZER,
+                caliber_mm=155.0,
+                muzzle_velocity=827.0,
+                base_accuracy_mrad=0.8,       # 间瞄射击散布（mrad，1σ）
+                drag_coefficient=0.35,        # 炮弹阻力系数
+                fire_rate_rpm=4.0,
+                max_range_m=15000.0,
+                fire_control_stabilization=0.6,
+                compatible_ammo=["m107_155mm_he_frag"],
+            ),
+            [
+                AmmoConfig(
+                    ammo_id="m107_155mm_he_frag",
+                    name="M107 155mm HE-FRAG",
+                    ammo_type=AmmoType.HE_FRAG,
+                    pen_mm_rha=60.0,          # HE 对轻甲/破片侵彻（主杀伤 = 爆破）
+                    muzzle_velocity=827.0,
+                    projectile_type=ProjectileType.MISSILE,
+                    is_heat=True,             # 化学能语义：穿深不随距离衰减
+                    drag_coefficient=0.35,
+                    # 落点毁伤（docs §七.1：球形爆破 + 破片锥，经提交池结算）
+                    blast_radius=25.0,        # 爆炸半径 (m)
+                    blast_dmg=150.0,          # 球形爆破中心毁伤量
+                    frag_dmg=25.0,            # 单破片伤害
+                    frag_count=120,           # 破片数
                 ),
             ],
         )

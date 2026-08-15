@@ -1,10 +1,16 @@
-"""主窗口（Phase 5 骨架：管线集成 + 主题菜单 + 主循环）。
+"""主窗口（Phase 5：管线集成 + 主题菜单 + 主循环 + 快捷键）。
 
 对应 docs/phase5-ui-pipeline-design.md §1 / §2.3：
-    - 水平 QSplitter：GLWidget（左，拉伸 3）+ 占位 SidePanel（右，拉伸 1）
+    - 水平 QSplitter：GLWidget（左，拉伸 3）+ SidePanel（右，拉伸 1）
     - 菜单栏：主题切换（ThemeManager.switch 热切换）、叙事（跳过对话）
     - 主循环（QTimer 帧定时器驱动）：
         Simulation.step → WorldAdapter → NarrativeEngine.tick → UI 刷新
+    - Phase 5e：
+        * ui/controls.py 快捷键（空格暂停 / 回车推进对话 / 数字选选项 /
+          S 跳过 / Ctrl+1/2/3 主题 / F1 帮助）——GLWidget 事件过滤器分发
+        * 手动暂停（_manual_paused，与对话暂停独立）
+        * 单位速度：渲染层位置差分 + EMA 平滑（不动引擎，adapter.armor_speed）
+        * 战场特效事件喂入 GLWidget（弹道线 / 命中标记缓冲）
 """
 from __future__ import annotations
 
@@ -13,12 +19,13 @@ import time
 from pathlib import Path
 
 import numpy as np
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QAction
+from PySide6.QtCore import QEvent, Qt, QTimer
+from PySide6.QtGui import QAction, QKeyEvent
 from PySide6.QtWidgets import QMainWindow, QSplitter, QTabWidget
 
 from Airis.lulilo.coordinates.grid import world_to_grid
 from Airis.lulilo.entities.pools import ArmorPool, BoxPool, PartType, ProjectilePool
+from Airis.lulilo.entities.side import Side, allegiance
 from Airis.lulilo.logistics.ammo import AmmoManager
 from Airis.lulilo.logistics.fuel import FuelManager
 from Airis.lulilo.movement.integrate import build_armor_movement_hook
@@ -33,6 +40,7 @@ from Airis.render.gl_widget import GLWidget
 from Airis.render.hud.log_widget import LogWidget
 from Airis.ui.archive_panel import ArchivePanel
 from Airis.ui.briefing_panel import BriefingPanel
+from Airis.ui.controls import ControlMap
 from Airis.ui.detail_panel import DetailPanel
 from Airis.ui.narrative_overlay import NarrativeOverlay
 
@@ -87,14 +95,25 @@ class MainWindow(QMainWindow):
         self.gl_widget.unit_selected.connect(self.detail_panel.set_selection)
         self.narrative_overlay.option_selected.connect(self._on_option_selected)
 
+        # ── Phase 5e：键盘快捷键（ui/controls.py）──
+        # 事件过滤器只装在 GLWidget 上：焦点在战场时响应热键；
+        # 焦点在按钮/输入框时按键走 Qt 默认行为（空格=点击按钮等）。
+        self.gl_widget.installEventFilter(self)
+
         # ── 主循环（帧定时器）──
-        self._paused = False
+        self._paused = False            # 对话暂停（叙事层驱动）
+        self._manual_paused = False     # Phase 5e：手动暂停（空格键，独立）
+        self._active_dialogue_id: str | None = None   # Phase 5e：当前对话 id（快捷键选选项用）
         self._fps = 0.0
         self._frame_count = 0
         self._fps_clock = time.monotonic()
         self._tick_timer = QTimer(self)
         self._tick_timer.timeout.connect(self._on_frame)
         self._tick_timer.start(16)
+
+        # Phase 5e：渲染层速度估计状态（位置差分 + EMA）
+        self._prev_pos: np.ndarray | None = None
+        self._speed_ema: np.ndarray | None = None
 
         # 状态栏刷新（100ms）
         self._status_timer = QTimer(self)
@@ -113,8 +132,8 @@ class MainWindow(QMainWindow):
     ) -> tuple[SimulationLoop, dict[int, str], dict[int, str]]:
         """创建模拟层 + 演示编队 + 后勤 + 移动/悬挂管线，返回 (loop, unit_names, side_map)。
 
-        注意：ArmorPool 暂无 side 字段（Phase 8 接入），这里用动态附加
-        属性演示敌我着色；WorldAdapter.from_snapshot 通过 getattr 读取。
+        注意：ArmorPool.side 为绝对阵营 SoA 字段（entities/side.py Side 枚举）；
+        演示默认玩家=北约(0)，敌友中立由 allegiance() 派生。
 
         🔥 2026-08-13 接入移动+悬挂（docs/suspension-slope-design.md §2）：
         - 逻辑 WorldMesh = DualContourBuilder（连续场平滑 → 地面双线性斜面，
@@ -133,7 +152,6 @@ class MainWindow(QMainWindow):
         state.projectile_pool = proj
         state.ammo = ammo
         state.fuel = fuel
-        armor.side = np.zeros(armor.capacity, dtype=np.uint8)   # 动态附加（演示）
 
         terrain = self.gl_widget.terrain
         hf = terrain.heightfield
@@ -201,8 +219,8 @@ class MainWindow(QMainWindow):
             return first
 
         # 两队相向推进到峡谷长桥两端附近（穿越 fBm 起伏 + 可能上桥）
-        _squad(60, 60, 0, 0.0, target=(150.0, 128.0))
-        enemy_first = _squad(196, 196, 1, 3.14159, target=(110.0, 128.0))
+        _squad(60, 60, int(Side.NATO), 0.0, target=(150.0, 128.0))
+        enemy_first = _squad(196, 196, int(Side.PACT), 3.14159, target=(110.0, 128.0))
         box.sync_all_from_parent(armor)
 
         # 演示损坏部位标记：敌军首车炮塔毁伤（HUD ⚠ 标记 Phase 5 即可生效）
@@ -217,9 +235,10 @@ class MainWindow(QMainWindow):
         for idx in range(armor.capacity):
             if armor.active[idx]:
                 side_int = int(armor.side[idx])
-                model = "T-90" if side_int == 0 else "T-72B3"
+                model = "T-90" if side_int == int(Side.NATO) else "T-72B3"
                 unit_names[idx] = f"{model} #{idx:02d}"
-                side_map[idx] = "ally" if side_int == 0 else "enemy"
+                # 相对敌友派生：演示场景玩家=北约，中立 → "neutral"
+                side_map[idx] = allegiance(int(Side.NATO), -1, side_int, -1)
 
         # 移动+悬挂管线（每帧推进；弹簧 dt=1/60 稳定域内）
         loop = SimulationLoop(state=state)
@@ -333,6 +352,66 @@ class MainWindow(QMainWindow):
         self.narrative_overlay.update_state(state)
 
     # ------------------------------------------------------------------
+    # Phase 5e：键盘快捷键（ui/controls.py 映射 → 动作分发）
+    # ------------------------------------------------------------------
+
+    def eventFilter(self, obj, event) -> bool:
+        """GLWidget 按键过滤：ControlMap 映射动作，命中则分发并消费。
+
+        Esc（取消选中）不在此拦截——GLWidget 原有的 keyPressEvent 处理，
+        返回 False 让事件继续传播。
+        """
+        if (
+            obj is self.gl_widget
+            and event.type() == QEvent.Type.KeyPress
+            and isinstance(event, QKeyEvent)
+        ):
+            action = ControlMap.key_action(event)
+            if action is not None:
+                if action == ControlMap.CANCEL_SELECTION:
+                    return False  # 交还 GLWidget 处理（取消选中）
+                self._handle_action(action)
+                return True
+        return super().eventFilter(obj, event)
+
+    def _handle_action(self, action: str) -> None:
+        """按动作名分发到具体处理槽。"""
+        if action == ControlMap.TOGGLE_PAUSE:
+            self._manual_paused = not self._manual_paused
+            self.statusBar().showMessage(
+                "⏸ 手动暂停" if self._manual_paused else "▶ 恢复运行", 2000
+            )
+        elif action == ControlMap.ADVANCE_DIALOGUE:
+            if self.narrative.has_active_dialogue:
+                state = self.narrative.advance_dialogue(None)
+                self._paused = state.paused
+                self.narrative_overlay.update_state(state)
+        elif action == ControlMap.SKIP_DIALOGUE:
+            self._skip_dialogue()
+        elif action.startswith(ControlMap.OPTION_PREFIX):
+            try:
+                idx = int(action[len(ControlMap.OPTION_PREFIX):])
+            except ValueError:
+                return
+            self._choose_option(idx)
+        elif action.startswith(ControlMap.THEME_PREFIX):
+            tid = action[len(ControlMap.THEME_PREFIX):]
+            tm = self.gl_widget.theme_manager
+            if tm is not None and tid in tm.discover():
+                self._switch_theme(tid)
+        elif action == ControlMap.SHOW_HELP:
+            self.statusBar().showMessage(ControlMap.HELP_TEXT, 8000)
+
+    def _choose_option(self, option_index: int) -> None:
+        """快捷键选择对话选项（等价点击选项按钮 → Command 入队）。"""
+        did = self._active_dialogue_id
+        if did is None:
+            return
+        state = self.narrative.on_player_choice(did, option_index)
+        self._paused = state.paused
+        self.narrative_overlay.update_state(state)
+
+    # ------------------------------------------------------------------
     # 面板数据源（消费 narrative/recorder；延迟防御：_build_ui 阶段
     # narrative 尚未创建，此时返回空）
     # ------------------------------------------------------------------
@@ -375,30 +454,41 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _on_frame(self) -> None:
-        # 1. 模拟层推进（对话暂停 / 模拟暂停时冻结）
-        if not self._paused and not self.simulation.sim_paused:
+        # 1. 模拟层推进（对话暂停 / 手动暂停 / 模拟暂停时冻结）
+        if (
+            not (self._manual_paused or self._paused)
+            and not self.simulation.sim_paused
+        ):
             self.simulation.step(1 / 60)
 
         # 2. 孪生适配器（Phase 5 透传；Phase 8 传感器融合）
         events = self.simulation.events.drain()
         snapshot = self.simulation.state.snapshot()
-        self.adapter = WorldAdapter.from_snapshot(snapshot)
+        # Phase 5e：渲染层位置差分速度估计（EMA 平滑，不动引擎）
+        armor = snapshot.pools.get("armor")
+        speed = self._estimate_speed(armor.pos if armor is not None else None)
+        self.adapter = WorldAdapter.from_snapshot(snapshot, armor_speed=speed)
 
         # 3. 叙事层消费
         narrative_state = self.narrative.tick(snapshot, events)
         self._paused = narrative_state.paused
+        d = narrative_state.active_dialogue
+        self._active_dialogue_id = (
+            d.dialogue_id if d is not None and not d.is_finished else None
+        )
 
         # 4. UI 刷新（注入 adapter，永不注入原始 snapshot）
         self.gl_widget.set_adapter(self.adapter)
         self.detail_panel.set_adapter(self.adapter)
         self.narrative_overlay.update_state(narrative_state)
         if events:
-            self.log_widget.append_events(
-                [
-                    {"time": snapshot.sim_time, "kind": ev.kind, "data": ev.data}
-                    for ev in events
-                ]
-            )
+            event_dicts = [
+                {"time": snapshot.sim_time, "kind": ev.kind, "data": ev.data}
+                for ev in events
+            ]
+            self.log_widget.append_events(event_dicts)
+            # Phase 5e：弹道线 / 命中标记特效缓冲（与日志同一份事件）
+            self.gl_widget.feed_effects(event_dicts)
 
         # 5. 渲染刷新
         self.gl_widget.update()
@@ -412,6 +502,32 @@ class MainWindow(QMainWindow):
             self._fps_clock = now
 
     # ------------------------------------------------------------------
+    # Phase 5e：渲染层速度估计（位置差分 + EMA，不动引擎）
+    # ------------------------------------------------------------------
+
+    def _estimate_speed(self, pos: np.ndarray | None) -> np.ndarray | None:
+        """由相邻两帧位置差分估计水平速度（m/s），EMA 平滑。
+
+        返回与 pos 等长的 float32 数组；首帧 / 形状变化时返回 0 并重置。
+        对话/手动暂停期间位置不变 → 速度自然归 0。
+        """
+        if pos is None or len(pos) == 0:
+            self._prev_pos = None
+            self._speed_ema = None
+            return None
+        if self._prev_pos is None or self._prev_pos.shape != pos.shape:
+            self._prev_pos = pos.copy()
+            self._speed_ema = np.zeros(len(pos), dtype=np.float32)
+            return self._speed_ema
+        delta = np.hypot(
+            pos[:, 0] - self._prev_pos[:, 0], pos[:, 1] - self._prev_pos[:, 1]
+        )
+        raw = (delta / (1.0 / 60.0)).astype(np.float32)  # step(1/60) 每帧
+        self._speed_ema = self._speed_ema * 0.6 + raw * 0.4
+        self._prev_pos = pos.copy()
+        return self._speed_ema
+
+    # ------------------------------------------------------------------
     # 状态栏
     # ------------------------------------------------------------------
 
@@ -420,7 +536,12 @@ class MainWindow(QMainWindow):
         tm = self.gl_widget.theme_manager
         theme_name = tm.current.name if tm is not None and tm.current else "-"
         sim = self.simulation.state
-        state = "⏸ 对话暂停" if self._paused else "▶ 运行中"
+        if self._manual_paused:
+            state = "⏸ 手动暂停"
+        elif self._paused:
+            state = "⏸ 对话暂停"
+        else:
+            state = "▶ 运行中"
         n_units = self.adapter.unit_count() if self.adapter else 0
         self.statusBar().showMessage(
             f"{state} | 模拟 t={sim.sim_time:6.1f}s tick={sim.tick_count} | "

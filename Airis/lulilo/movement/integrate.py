@@ -736,6 +736,8 @@ def integrate_guided_projectile_movement(
     active: np.ndarray,                    # (M,) bool_
     age: np.ndarray,                       # (M,) float32 飞行时间（推进剖面时序）
     guid_target_pos: np.ndarray,           # (M, 3) float32 检测到的目标坐标
+    guid_target_vel: np.ndarray,           # (M, 3) float32 目标速度（Phase 7：AAM 打高速机；地面恒 0）
+    guid_target_kind: np.ndarray,          # (M,) int8 目标种类（0=地面 1=空中；Phase 7 重力补偿判定）
     guid_memory_pos: np.ndarray,           # (M, 3) float32 最后已知坐标（MEMORY）
     guid_stage: np.ndarray,                # (M,) int32 阶段状态机（给回调的输入）
     guid_nav_gain: np.ndarray,             # (M,) float32 制导增益（per-ammo，SoA）
@@ -753,7 +755,8 @@ def integrate_guided_projectile_movement(
     - SCAN：悬停（位置/速度不变）。
     - TRACK / MEMORY / TERMINAL：目标坐标（MEMORY 用记忆点，其余用检测坐标）→
       FOV 门限 → control_fn 算总加速度 → 执行器饱和 → 半隐式积分 + 重力。
-    - 目标速度恒 0（模块级 _ZERO_VEL；Phase 7 空战接入真实 target_vel）。
+    - 目标速度 = `guid_target_vel`（Phase 7 空战接入真实 target_vel；地面目标恒 0
+      → 与旧 `_ZERO_VEL` 行为**逐位一致**，旧测试不退化）。
 
     Note:
         control_fn 签名（docs §3.5，含 stage 状态机输入）：
@@ -810,9 +813,14 @@ def integrate_guided_projectile_movement(
         # 控制回调：总加速度 = 转向 + 轴向推力（回调内部按 stage/override 分派）
         accel = np.empty(3, dtype=np.float32)
         control_fn(
-            pos[i], vel[i], tpos, _ZERO_VEL,
+            pos[i], vel[i], tpos, guid_target_vel[i],
             age[i], guid_stage[i], guid_override[i], guid_nav_gain[i], dt, accel,
         )
+
+        # Phase 7：空中目标（guid_target_kind=1，含静止直升机）→ 重力补偿
+        # （真实导弹制导弹道下坠补偿；地面目标 kind=0 → 本分支不生效，6b 行为不变）
+        if int(guid_target_kind[i]) == 1:
+            accel[2] += gravity
 
         # 执行器饱和：总加速度上限（转向 + 轴向推力，40g 默认防截断推力）
         a2 = accel[0] * accel[0] + accel[1] * accel[1] + accel[2] * accel[2]

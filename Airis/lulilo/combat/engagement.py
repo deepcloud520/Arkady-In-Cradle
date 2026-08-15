@@ -27,6 +27,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -36,6 +37,7 @@ from Airis.lulilo.combat.collision import (
     CollisionDetector,
     CollisionHit,
     FormationResolver,
+    detect_proj_aircraft_batch,
     segment_aabb_single,
     world_to_local,
 )
@@ -49,6 +51,7 @@ from Airis.lulilo.combat.damage import (
 from Airis.lulilo.combat.damage_submission import (
     DamageKind,
     DamageSubmissionPool,
+    resolve_aircraft_area_damage,
     resolve_area_damage,
 )
 from Airis.lulilo.combat.guidance import (
@@ -84,6 +87,7 @@ from Airis.lulilo.detection.sensors import (
     radar_detection_range,
 )
 from Airis.lulilo.entities.pools import (
+    EMITTER_KIND_DECOY,
     EMITTER_KIND_IR_SOURCE,
     EMITTER_KIND_SEEKER,
     EMITTER_KIND_SPOT,
@@ -102,12 +106,16 @@ from Airis.lulilo.movement.integrate import (
     integrate_guided_projectile_movement,
     integrate_projectile_movement,
 )
+from Airis.lulilo.terrain.heightfield import NO_SURFACE
 from Airis.lulilo.simulation.loop import EventBus, TICK_BULLET
 
 logger = get_logger(__name__)
 
 # 弹丸最大飞行寿命（秒），超出回收（防止永不命中无限存在）
 PROJECTILE_MAX_AGE = 20.0
+# 曲射弹丸最大寿命（秒）：45° 高抛下 T = √(2R/g)，R=15000m → ~55s；
+# 弹道解算保证必落点，故仅需一个宽松上限（docs §六.1 固定仰角模式）
+INDIRECT_MAX_AGE = 90.0
 # 弹丸回收边界（米），超出即视为脱靶/飞出战场
 WORLD_BOUND = 5000.0
 # 发射初始抬高（炮管高度，m）
@@ -116,6 +124,10 @@ MUZZLE_HEIGHT = 1.5
 # Phase 6b 制导常量（docs/phase6-guidance-pipeline.md §八）
 GUIDED_MAX_ACCEL = 40.0 * 9.81  # 总加速度饱和（推力+转向；40g 防截断轴向推力）
 SEEK_RADIUS_M = 200.0           # 导引头在锁定坐标附近的目标搜索半径（防跳变）
+SEEK_RADIUS_AIR_M = 12000.0     # Phase 7：AAM/SAM 对飞机的搜索半径（以弹丸位置为中心）。
+                                # 防空导弹由地面雷达引导（docs §十），末段导引头
+                                # 搜索覆盖全射程——锁实时目标位 + PN 前置量；
+                                # 横切目标仍受 40g 转弯半径物理限制（真实兵棋亦然）
 
 # 部位 → 等效装甲厚度系数（简化：不同部位抗性不同）
 PART_ARMOR_FACTOR: dict[int, float] = {
@@ -129,6 +141,52 @@ PART_ARMOR_FACTOR: dict[int, float] = {
 # 弹药殉爆爆炸参数（docs/part-health-design.md §四：小范围大威力）
 COOKOFF_RADIUS = 8.0        # 殉爆爆炸半径 (m)
 COOKOFF_STRENGTH = 300.0    # 殉爆中心毁伤量（本车 HULL=100 必归零 → 摧毁）
+
+# 地面爆炸破片锥半角（°；炮击落点爆炸比直射命中更张开）
+INDIRECT_FRAG_HALF_ANGLE_DEG = 60.0
+
+
+def solve_ballistic(
+    v: float,
+    R: float,
+    z0: float,
+    g: float,
+    elevation_deg: float | None = None,
+) -> tuple[float, float] | None:
+    """解算曲射发射参数（docs/phase6-ai-pipeline.md §六.1「高抛角由射距解算」）。
+
+    弹道：z_rel(t) = z0 + v·sinθ·t − ½·g·t²，落点 R = v·cosθ·T（T 飞行时长）。
+    消去 T：z0 + R·tanθ = g·R²/(2·v²·cos²θ)，令 t = tanθ：
+        A·t² − R·t + (A − z0) = 0，A = g·R²/(2·v²)
+
+    Args:
+        v: 初速 (m/s)；elevation_deg 给定时代入方程解速度（此时 v 为占位）。
+        R: 水平射距 (m)。
+        z0: 炮口相对落点高度 (m，>0 炮口更高)。
+        g: 重力加速度 (m/s²)。
+        elevation_deg: 固定仰角 (°)；None → 用 v 解仰角（取低伸解）。
+
+    Returns:
+        (初速, 仰角 rad)；无解（射距超出该初速可达范围）返回 None。
+    """
+    if R <= 1e-6 or g <= 0.0:
+        return None
+    if elevation_deg is not None:
+        th = math.radians(float(elevation_deg))
+        denom = 2.0 * math.cos(th) ** 2 * (z0 + R * math.tan(th))
+        if denom <= 0.0:
+            return None
+        return math.sqrt(R * R * g / denom), th
+    if v <= 0.0:
+        return None
+    A = g * R * R / (2.0 * v * v)
+    disc = R * R - 4.0 * A * (A - z0)
+    if disc < 0.0:
+        return None  # R·g/v² > 1：初速不足，射距不可达
+    t = (R - math.sqrt(disc)) / (2.0 * A)
+    if t <= 0.0:
+        return None
+    return v, math.atan(t)
 
 
 @dataclass
@@ -206,10 +264,13 @@ class FiringControl:
         sal: SALSystem | None = None,
         # ---- Phase 6c 步骤③：爆炸/毁伤提交池（docs/phase6-ai-pipeline.md §七）----
         damage_pool: DamageSubmissionPool | None = None,
+        # ---- Phase 7 空中部队（docs/phase7-air-pipeline.md §七）----
+        aircraft: Any | None = None,
     ) -> None:
         self.armor = armor
         self.boxes = boxes
         self.projectiles = projectiles
+        self.aircraft = aircraft  # AircraftPool（None = 无空战，旧测试兼容）
         self.weapon_system = weapon_system or WeaponSystem(WeaponRegistry.with_builtin())
         self.damage_resolver = damage_resolver or DamageResolver()
         self.detector = detector or CollisionDetector()
@@ -237,6 +298,8 @@ class FiringControl:
 
         # 开火冷却（armor_idx → 剩余秒数）
         self._cooldown: dict[int, float] = {}
+        # 飞机开火冷却（AircraftPool 索引空间，与装甲隔离，Phase 7）
+        self._cooldown_air: dict[int, float] = {}
 
         # 抛射物元数据已下沉为 ProjectilePool SoA 数组（2026-08-11）：
         #   projectiles.weapon / projectiles.ammo / projectiles.age
@@ -450,6 +513,368 @@ class FiringControl:
         )
         return rec
 
+    # ------------------------------------------------------------------
+    # 飞机开火（Phase 7，docs/phase7-air-pipeline.md §7.1）
+    # ------------------------------------------------------------------
+
+    def fire_air(
+        self,
+        shooter_idx: int,
+        target_pos: np.ndarray,
+        *,
+        ammo_id: str,
+        target_kind: int = 0,      # 0=空中（AAM，扣 aam_left） 1=地面（AGM/炸弹，扣 agm_left）
+        target_idx: int = -1,      # 目标池索引（-1 纯坐标投弹）
+        confidence: float = 1.0,   # Phase 8：数据链共享航迹发射（<1 → 散布折扣，docs §7.2）
+    ) -> FireRecord | None:
+        """飞机开火（AAM/AGM/滑翔弹/自由落体）：与 `fire()` 同构（docs §7.1）。
+
+        与 `fire()` 的差异（仅三处）：
+            ① 射手位置 = `aircraft.pos[shooter_idx]`（挂架偏移简化为机头）。
+            ② 弹药消耗 = `aircraft.aam_left/agm_left` 自减（非 logistics.ammo）。
+            ③ owner = AircraftPool 索引（`ProjectilePool.owner` 语义不变）。
+        其余（WeaponSystem.solve 散布 / 弹丸 spawn / 制导字段写入 / 主动雷达
+        emitter 激活）与 `fire()` 共用同一套代码路径。
+
+        Args:
+            shooter_idx: AircraftPool 索引。
+            target_pos: 目标世界坐标 (3,)。
+            ammo_id: 航空弹药 ammo_id（须已注册，且 registry 存在同名 weapon 条目）。
+            target_kind: 0=空中目标（写 guid_target_kind=1 + AAM 前置量），
+                1=地面目标（guid_target_kind=0，guid_target_vel 恒 0）。
+            target_idx: 目标在对应池的索引（-1 纯坐标；>0 时 AAM 取目标速度做前置量）。
+
+        Returns:
+            FireRecord；射手失活 / 弹药耗尽 / 超射程 → None。
+        """
+        if self.aircraft is None or not self.aircraft.active[shooter_idx]:
+            return None
+        if target_kind == 0 and int(self.aircraft.aam_left[shooter_idx]) <= 0:
+            return None
+        if target_kind == 1 and int(self.aircraft.agm_left[shooter_idx]) <= 0:
+            return None
+
+        shooter_pos = self.aircraft.pos[shooter_idx]
+        ax = float(target_pos[0])
+        ay = float(target_pos[1])
+        az = float(target_pos[2])
+        dx = ax - float(shooter_pos[0])
+        dy = ay - float(shooter_pos[1])
+        dz = az - float(shooter_pos[2])
+        range_m = float(np.sqrt(dx * dx + dy * dy + dz * dz))
+        if range_m <= 1e-6:
+            return None
+
+        # 武器条目：航空弹药以 ammo_id 同名注册（weapon_id == ammo_id）
+        try:
+            weapon_def = self.weapon_system.registry.get_definition(ammo_id, ammo_id)
+        except KeyError:
+            return None
+        if range_m > weapon_def.weapon.max_range_m:
+            return None
+
+        # 目标速度（AAM 前置量；地面目标恒 0）
+        if target_kind == 0 and target_idx >= 0 and self.aircraft.active[target_idx]:
+            tv = self.aircraft.vel[target_idx]
+        else:
+            tv = np.zeros(3, dtype=np.float32)
+
+        # 解算（空中射手：技能/能见度/状况取满值，运动修正按空速）
+        spd = float(np.linalg.norm(self.aircraft.vel[shooter_idx]))
+        sol = self.weapon_system.solve(
+            ammo_id, ammo_id, range_m,
+            crew_skill=1.0,
+            visibility=1.0,
+            weapon_condition=1.0,
+            posture="MOVING",
+            target_speed=float(np.linalg.norm(tv)),
+            shooter_speed=spd,
+        )
+        # Phase 8：数据链共享航迹发射 → 命中概率折扣（docs §7.2）
+        #   共享航迹坐标带误差 → 散布放大：sigma *= (2 - confidence)
+        if confidence < 1.0:
+            sol.sigma_m *= max(0.0, 2.0 - float(confidence))
+
+        # 高斯散布（统计层 → 物理落点）
+        disp_x, disp_y = self.rng.dispersion_offset(sol.sigma_m)
+        hit_x = ax + disp_x
+        hit_y = ay + disp_y
+
+        # 发射方向：机头 → 散布落点
+        ox = float(shooter_pos[0])
+        oy = float(shooter_pos[1])
+        oz = float(shooter_pos[2])
+        dir_x = hit_x - ox
+        dir_y = hit_y - oy
+        dir_z = az - oz
+        norm = float(np.sqrt(dir_x * dir_x + dir_y * dir_y + dir_z * dir_z))
+        if norm <= 1e-9:
+            return None
+
+        ammo_def = self.weapon_system.registry.get_ammo(sol.ammo_id)
+        proj_idx = self.projectiles.spawn(
+            ox, oy, oz,
+            dir_x / norm * sol.muzzle_velocity,
+            dir_y / norm * sol.muzzle_velocity,
+            dir_z / norm * sol.muzzle_velocity,
+            radius=0.12,
+            dmg=float(ammo_def.pen_mm_rha),
+            kind=int(self._kind_of(sol.ammo_id)),
+            owner=shooter_idx,
+        )
+        self.projectiles.owner_kind[proj_idx] = 1   # 射手 = 飞机（seeker 排除射手空间）
+
+        # 弹药消耗（航空挂架自减）
+        if target_kind == 0:
+            self.aircraft.aam_left[shooter_idx] -= 1
+        else:
+            self.aircraft.agm_left[shooter_idx] -= 1
+
+        # 冷却（飞机独立冷却表，与装甲索引空间隔离）
+        rpm = weapon_def.weapon.fire_rate_rpm
+        self._cooldown_air[shooter_idx] = 60.0 / max(rpm, 1e-6)
+
+        # 抛射物元数据
+        self.projectiles.weapon[proj_idx] = self.weapon_system.registry.weapon_index(ammo_id)
+        self.projectiles.ammo[proj_idx] = self.weapon_system.registry.ammo_index(sol.ammo_id)
+        self.projectiles.age[proj_idx] = 0.0
+
+        # ---- 制导字段（同 fire()，docs §7.2）----
+        law_id = ammo_def.control_law_id
+        if law_id:
+            self.projectiles.guid_law[proj_idx] = self.control.index_of(law_id)
+            self.projectiles.guid_target_pos[proj_idx] = (ax, ay, az)
+            self.projectiles.guid_target_vel[proj_idx] = tv
+            self.projectiles.guid_target_kind[proj_idx] = 1 if target_kind == 0 else 0
+            self.projectiles.guid_nav_gain[proj_idx] = float(ammo_def.nav_gain)
+            self.projectiles.guid_search_fov_cos[proj_idx] = float(
+                np.cos(np.radians(ammo_def.search_fov_deg))
+            )
+            self.projectiles.guid_track_fov_cos[proj_idx] = float(
+                np.cos(np.radians(ammo_def.track_fov_deg))
+            )
+            self.projectiles.guid_filter_quality[proj_idx] = float(ammo_def.filter_quality)
+            self.projectiles.guid_stage[proj_idx] = int(GuidanceStage.TRACK)
+            if ammo_def.seeker == SeekerType.ACTIVE_RADAR:
+                self.emitters.activate_from_projectile(
+                    proj_idx,
+                    float(ammo_def.emitter_power_db),
+                    EmitterBand.RF,
+                    EMITTER_KIND_SEEKER,
+                )
+
+        rec = FireRecord(
+            shooter_idx=shooter_idx,
+            target_idx=target_idx,
+            proj_idx=proj_idx,
+            weapon_id=sol.weapon_id,
+            ammo_id=sol.ammo_id,
+            range_m=range_m,
+            sigma_m=sol.sigma_m,
+            aim_x=ax,
+            aim_y=ay,
+            aim_z=az,
+        )
+        self.events.emit(
+            "fire_air",
+            {
+                "shooter": shooter_idx,
+                "target": target_idx,
+                "proj": proj_idx,
+                "weapon": sol.weapon_id,
+                "ammo": sol.ammo_id,
+                "range": range_m,
+                "target_kind": target_kind,
+            },
+        )
+        return rec
+
+    def relay_guidance(
+        self, proj_idx: int, new_pos: np.ndarray | tuple, link_q: float
+    ) -> None:
+        """数据链中继制导（Phase 8，docs §7.1：A 导 B 射的落地点）。
+
+        把第三方（前出侦察/预警机）的孪生航迹写入导弹 `guid_target_pos`：
+        - 导弹侧零改动：`guid_target_pos` 本来就是外部可写字段（6b）；
+        - `guid_comm` 按链路质量折扣——6b 门控（comm < threshold → 停导 →
+          HOLD/MEMORY）自动处理「链路丢失 → 中继断开」；
+        - 末端导引头激活（ACTIVE_RADAR 锁定）后数据链退出（导引头接管）。
+        """
+        p = self.projectiles
+        if not p.active[proj_idx]:
+            return
+        p.guid_target_pos[proj_idx] = new_pos
+        p.guid_comm[proj_idx] = min(1.0, max(0.0, float(link_q)))
+
+    # ------------------------------------------------------------------
+    # 曲射（间瞄射击，Phase 6c 步骤⑤，docs/phase6-ai-pipeline.md §六）
+    # ------------------------------------------------------------------
+
+    def fire_indirect(
+        self,
+        shooter_idx: int,
+        aim_x: float,
+        aim_y: float,
+        aim_z: float | None = None,
+        *,
+        ammo_id: str | None = None,
+        target_idx: int = -1,
+        elevation_deg: float | None = None,
+    ) -> FireRecord | None:
+        """榴弹炮曲射（间接火力）：向世界坐标 (aim_x, aim_y) 抛射高抛弹道。
+
+        - 弹道：复用 `integrate_projectile_movement`（直线 + 重力），初速方向与
+          仰角由 `solve_ballistic` 解算——默认用弹药初速解低伸角，elevation_deg
+          给定则固定仰角反解初速（docs §六.1「简化：固定 45°」）。
+        - 落点毁伤：落地（z ≤ 地面高度）→ 提交池 SPHERE + FRAG_CONE（Tick 末结算）。
+        - 散布：统计层 sigma（WeaponSystem.solve）→ 高斯偏移加到落点坐标。
+        - 弹药消耗 / 冷却：同直射（AmmoManager 每发 1 单位 + 射速冷却）。
+
+        Args:
+            shooter_idx: 炮兵装甲索引（role=ARTILLERY，配置 HOWITZER 武器）。
+            aim_x, aim_y: 目标世界坐标（水平）。
+            aim_z: 落点地面高度；None → 查地形（无地形 → 0.0）。
+            ammo_id: 覆盖单位配置的弹药；None 用配置默认。
+            target_idx: 关联目标装甲索引（-1 纯地形点；仅记录/事件用）。
+            elevation_deg: 固定仰角 (°)；None → 用弹药初速自动解算。
+
+        Returns:
+            FireRecord；冷却/无炮塔/无弹药/超射程/不可达 → None。
+        """
+        if not self.can_fire(shooter_idx):
+            return None
+        cfg = self._config_of(shooter_idx)
+        shooter_pos = self.armor.pos[shooter_idx]
+
+        land_z = (
+            float(aim_z)
+            if aim_z is not None
+            else self._ground_z(float(aim_x), float(aim_y), 0.0)
+        )
+        ox = float(shooter_pos[0])
+        oy = float(shooter_pos[1])
+        oz = float(shooter_pos[2] + MUZZLE_HEIGHT)
+
+        # 水平射距（射程判定）
+        dx = aim_x - ox
+        dy = aim_y - oy
+        R = float(np.hypot(dx, dy))
+        if R <= 1e-3 or R > cfg.max_range_m:
+            return None
+
+        # 统计层散布（与直射同链）：sigma → 高斯偏移 → 实际落点
+        dz = land_z - oz
+        sol = self.weapon_system.solve(
+            cfg.weapon_id,
+            ammo_id or cfg.ammo_id,
+            float(math.sqrt(dx * dx + dy * dy + dz * dz)),
+            crew_skill=cfg.crew_skill,
+            visibility=cfg.visibility,
+            weapon_condition=cfg.weapon_condition,
+        )
+        disp_x, disp_y = self.rng.dispersion_offset(sol.sigma_m)
+        land_x = aim_x + disp_x
+        land_y = aim_y + disp_y
+
+        # 弹道解算：默认弹药初速 → 仰角；elevation_deg 固定仰角 → 反解初速
+        ammo_def = self.weapon_system.registry.get_ammo(sol.ammo_id)
+        mv = (
+            sol.muzzle_velocity
+            if sol.muzzle_velocity > 0.0
+            else float(ammo_def.muzzle_velocity)
+        )
+        R2 = float(np.hypot(land_x - ox, land_y - oy))
+        z0 = oz - land_z  # 炮口相对落点高度（>0 炮口更高）
+        solved = solve_ballistic(mv, R2, z0, self.gravity, elevation_deg=elevation_deg)
+        if solved is None:
+            return None  # 初速不足：射距不可达
+
+        # 发射速度向量：水平指向落点 + 垂直分量
+        speed, elev = solved
+        hd = float(np.hypot(land_x - ox, land_y - oy))
+        if hd <= 1e-9:
+            return None
+        vh = speed * math.cos(elev)
+        proj_idx = self.projectiles.spawn(
+            ox, oy, oz,
+            (land_x - ox) / hd * vh,
+            (land_y - oy) / hd * vh,
+            speed * math.sin(elev),
+            radius=0.08,
+            dmg=float(ammo_def.pen_mm_rha),
+            kind=int(self._kind_of(sol.ammo_id)),
+            owner=shooter_idx,
+        )
+
+        # 弹药消耗（每发 1 单位）+ 开火冷却（同直射）
+        if self.ammo is not None:
+            self.ammo.consume(shooter_idx, 1.0)
+        rpm = cfg.fire_rate_rpm
+        if rpm is None:
+            definition = self.weapon_system.registry.get_definition(
+                sol.weapon_id, sol.ammo_id
+            )
+            rpm = definition.weapon.fire_rate_rpm
+        self._cooldown[shooter_idx] = 60.0 / max(rpm, 1e-6)
+
+        # 弹丸元数据：武器/弹药索引 + 间瞄标记（落点引爆用）
+        self.projectiles.weapon[proj_idx] = self.weapon_system.registry.weapon_index(
+            sol.weapon_id
+        )
+        self.projectiles.ammo[proj_idx] = self.weapon_system.registry.ammo_index(
+            sol.ammo_id
+        )
+        self.projectiles.age[proj_idx] = 0.0
+        self.projectiles.indirect[proj_idx] = True
+        # guid_target_pos 复用为落点参考（BALLISTIC 阶段不制导，仅记录/兜底地面高）
+        self.projectiles.guid_target_pos[proj_idx] = (land_x, land_y, land_z)
+        # BALLISTIC：阶段机不导引头检测（HE_FRAG seeker=NONE），物理 = 直线 + 重力
+        self.projectiles.guid_stage[proj_idx] = int(GuidanceStage.BALLISTIC)
+
+        rec = FireRecord(
+            shooter_idx=shooter_idx,
+            target_idx=target_idx,
+            proj_idx=proj_idx,
+            weapon_id=sol.weapon_id,
+            ammo_id=sol.ammo_id,
+            range_m=R,
+            sigma_m=sol.sigma_m,
+            aim_x=land_x,
+            aim_y=land_y,
+            aim_z=land_z,
+        )
+        self.events.emit(
+            "fire",
+            {
+                "shooter": shooter_idx,
+                "target": target_idx,
+                "proj": proj_idx,
+                "weapon": sol.weapon_id,
+                "ammo": sol.ammo_id,
+                "range": R,
+                "sigma": sol.sigma_m,
+                "indirect": True,
+            },
+        )
+        return rec
+
+    def _ground_z(self, x: float, y: float, fallback: float) -> float:
+        """世界坐标 (x, y) 的地面高度；无地形 / 出界 / 无地面段 → fallback。"""
+        terrain = self.terrain
+        if terrain is None:
+            return fallback
+        hf = getattr(terrain, "heightfield", None)
+        if hf is None:
+            return fallback
+        gx = int(np.floor(x / hf.cs))
+        gy = int(np.floor(y / hf.cs))
+        if not (0 <= gx < hf.width and 0 <= gy < hf.height):
+            return fallback
+        gz = hf.ground_z(gx, gy)
+        if gz == NO_SURFACE:
+            return fallback
+        return float(gz)
+
     def _kind_of(self, ammo_id: str) -> int:
         """弹药 → 抛射物类型（APFSDS/AP/APCR/PELE 为子弹，HEAT/ATGM/HE_FRAG/SAPHEI 为导弹）。
 
@@ -483,6 +908,9 @@ class FiringControl:
         # 冷却倒计时（所有已登记单位）
         for k in list(self._cooldown):
             self._cooldown[k] = max(0.0, self._cooldown[k] - dt)
+        # 飞机开火冷却（Phase 7）
+        for k in list(self._cooldown_air):
+            self._cooldown_air[k] = max(0.0, self._cooldown_air[k] - dt)
 
         # 编队推开：防装甲重叠（空间哈希，AGENTS.md 3.4）
         # 每地面 Tick 调用一次（模拟层已积分移动，此处修正重叠）
@@ -498,6 +926,9 @@ class FiringControl:
 
         # Phase 6c 步骤③：Tick 末统一结算伤害提交池（§七.3）
         self._resolve_damage_pool()
+
+        # Phase 7：坠毁链触地判定 → 爆炸 → 残骸（docs §7.4，地面 Tick 频率）
+        self._check_aircraft_crashes(dt)
 
     def _step_sub(self, sub_dt: float) -> None:
         """一个子弹子步：阶段切换 → 弹道/制导积分 → 碰撞 → 毁伤 → 回收。"""
@@ -521,6 +952,17 @@ class FiringControl:
         # 2.6 SAL 炸弹命中地形判定 → 炸桥（docs §7.5，步骤 9）
         self._check_sal_impact()
 
+        # 2.7 曲射弹丸落地判定 → 引爆（Phase 6c 步骤⑤，docs §六.1）
+        self._check_indirect_impact()
+
+        # 2.8 AAM 近炸引信（Phase 7，docs §7.3：prox_fuse_radius>0 弹丸 vs 飞机点距）
+        self._prox_fuse_check()
+
+        # 2.9 弹丸 vs 飞机机身箱直接命中（Phase 7，docs §7.4 ①）
+        air_hits = self._detect_air_hits(sub_dt)
+        for proj_idx, air_idx, _t, _hx, _hy, _hz in air_hits:
+            self._resolve_aircraft_hit(int(proj_idx), int(air_idx), sub_dt)
+
         # 3. 碰撞检测（空间哈希 broad + Numba narrow）
         hits = self.detector.detect(
             self.projectiles.pos,
@@ -538,6 +980,10 @@ class FiringControl:
         for hit in hits:
             if hit.proj_idx in destroyed_proj:
                 continue  # 同发弹丸只解析一次
+            if int(self.projectiles.owner[hit.proj_idx]) == hit.armor_idx:
+                # 自伤（发射瞬间弹丸与射手碰撞箱重叠，如 SAM 离架）→ 忽略且不销毁，
+                # 弹丸继续飞行（Phase 7 防空 SAM 修复；正常交战无自伤路径）
+                continue
             destroyed_proj.add(hit.proj_idx)
             self._resolve_hit(hit, sub_dt)
 
@@ -567,13 +1013,189 @@ class FiringControl:
                 continue
             integrate_guided_projectile_movement(
                 p.pos, p.vel, p.active, p.age,
-                p.guid_target_pos, p.guid_memory_pos, p.guid_stage,
+                p.guid_target_pos, p.guid_target_vel, p.guid_target_kind,
+                p.guid_memory_pos, p.guid_stage,
                 p.guid_nav_gain, p.guid_override,
                 p.guid_search_fov_cos, p.guid_track_fov_cos,
                 GUIDED_MAX_ACCEL, sub_dt, self.gravity, fn,
             )
         # 无制导弹（guid_law == -1）直线积分
         integrate_projectile_movement(p.pos, p.vel, p.active, sub_dt, self.gravity)
+
+    def _prox_fuse_check(self) -> None:
+        """AAM/SAM 近炸引信（docs §7.3）：`prox_fuse_radius>0` 的弹丸与飞机
+        相对距离 < 引信半径 + 机身等效半径 → 起爆（提交 SPHERE + 关闭弹丸）。
+
+        复杂度 256 AAM × 128 飞机 = 3.2 万次点距，每子弹子步纯 Python 循环可接受；
+        起爆后飞机毁伤走 `resolve_aircraft_area_damage`（§7.4 ②）。
+        """
+        p = self.projectiles
+        if self.aircraft is None or self.aircraft.active_count == 0:
+            return
+        air_idxs = self.aircraft.active_indices()
+        for proj in p.active_indices():
+            proj = int(proj)
+            if p.guid_target_kind[proj] != 1:
+                continue   # 只对空中目标起爆（对地弹走碰撞/落地）
+            ammo = self._ammo_of(proj)
+            if ammo is None or ammo.prox_fuse_radius <= 0.0:
+                continue
+            px = float(p.pos[proj, 0])
+            py = float(p.pos[proj, 1])
+            pz = float(p.pos[proj, 2])
+            trigger = ammo.prox_fuse_radius + 3.0   # 机身等效半径 ~3m
+            owner = int(p.owner[proj])
+            # 只排除飞机射手（owner_kind=1）：SAM 射手是装甲（owner_kind=0），
+            # 其索引与飞机池无关（跨池索引碰撞陷阱，Phase 7 防空修复）
+            exclude_air = owner if int(p.owner_kind[proj]) == 1 else -1
+            for t in air_idxs:
+                t = int(t)
+                if t == exclude_air:
+                    continue   # 不打射手（发射瞬间弹丸与射手同点）
+                if int(self.aircraft.state[t]) == 6:   # PARKED 不打
+                    continue
+                dx = float(self.aircraft.pos[t, 0]) - px
+                dy = float(self.aircraft.pos[t, 1]) - py
+                dz = float(self.aircraft.pos[t, 2]) - pz
+                if dx * dx + dy * dy + dz * dz > trigger * trigger:
+                    continue
+                # 起爆：提交 SPHERE 区域毁伤（对地/对邻近飞机统一结算）。
+                # 半径取 max(blast_radius, trigger)——破片覆盖须 ≥ 引信触发距离，
+                # 否则飞机在引信圈内起爆却在爆炸半径外（无伤害）。
+                if self.damage_pool is not None:
+                    self.damage_pool.submit_damage(
+                        DamageKind.SPHERE,
+                        (px, py, pz),
+                        radius=max(ammo.blast_radius, trigger),
+                        pen_mm=float(ammo.blast_dmg),
+                    )
+                self.events.emit(
+                    "prox_detonate",
+                    {"proj": proj, "target_air": t, "radius": trigger},
+                )
+                self._destroy_projectile(proj)
+                break
+
+    def _detect_air_hits(self, sub_dt: float) -> list[tuple[int, int, float, float, float, float]]:
+        """弹丸 vs 飞机机身箱碰撞（全对全 Numba 内核，docs §7.4 ①）。
+
+        机身箱 = BoxPool 中 `parent_kind==1` 的 box（sync 后世界 AABB）。
+        返回 [(proj_idx, aircraft_idx, t, hit_x, hit_y, hit_z)]。
+        """
+        b = self.boxes
+        if self.aircraft is None:
+            return []
+        mask = b.active & (b.parent_kind == 1)
+        if not np.any(mask):
+            return []
+        idxs = np.flatnonzero(mask)
+        pos = b.pos[idxs]
+        half = b.half[idxs]
+        active = b.active[idxs]
+        p = self.projectiles
+        out_hit = np.full(p.capacity, -1, dtype=np.int32)
+        out_t = np.full(p.capacity, 1e9, dtype=np.float32)
+        detect_proj_aircraft_batch(
+            p.pos, p.vel, p.radius, p.active,
+            pos, half, active, float(sub_dt),
+            out_hit, out_t,
+        )
+        hits: list[tuple[int, int, float, float, float, float]] = []
+        for proj in np.flatnonzero(out_hit >= 0):
+            proj = int(proj)
+            bi = int(out_hit[proj])
+            air_idx = int(b.parent[idxs[bi]])
+            t = float(out_t[proj])
+            p0 = p.pos[proj] - p.vel[proj] * float(sub_dt)
+            p1 = p.pos[proj]
+            hit_pos = p0 + (p1 - p0) * t
+            hits.append((proj, air_idx, t, float(hit_pos[0]), float(hit_pos[1]), float(hit_pos[2])))
+        return hits
+
+    def _resolve_aircraft_hit(
+        self, proj_idx: int, air_idx: int, sub_dt: float
+    ) -> None:
+        """弹丸命中飞机（docs §7.4 ①）：扣 health + 分段 dmg_factor 退化。
+
+        health > 70% → dmg_factor=1.0（无损）
+        40~70%      → 0.8（轻微：升力/推力×0.8）
+        < 40%       → 0.6（重度）
+        health ≤ 0 → CRASHING（`_begin_aircraft_crash`）。
+
+        忽略命中发射者自身（AAM 脱靶后误伤射手）。
+        """
+        a = self.aircraft
+        owner = int(self.projectiles.owner[proj_idx])
+        if owner == air_idx:
+            return
+        ammo = self._ammo_of(proj_idx)
+        dmg = float(ammo.pen_mm_rha) if ammo is not None else 10.0
+        # 近炸/命中伤害：命中即按弹药毁伤量（简化：不细分部位）
+        hp = float(a.health[air_idx]) - dmg
+        a.health[air_idx] = hp if hp > 0.0 else 0.0
+        frac = float(a.health[air_idx]) / 100.0
+        if frac > 0.7:
+            a.dmg_factor[air_idx] = 1.0
+        elif frac > 0.4:
+            a.dmg_factor[air_idx] = 0.8
+        else:
+            a.dmg_factor[air_idx] = 0.6
+        self.events.emit(
+            "air_hit",
+            {"proj": proj_idx, "target_air": air_idx, "dmg": dmg, "health": float(a.health[air_idx])},
+        )
+        if a.health[air_idx] <= 0.0:
+            self._begin_aircraft_crash(air_idx)
+        self._destroy_projectile(proj_idx)
+
+    def _begin_aircraft_crash(self, air_idx: int) -> None:
+        """血量归零 → 坠毁：置 CRASHING + 关闭机载雷达（尾焰保留残热）。
+
+        坠毁链的触地/爆炸判定在 `_check_aircraft_crashes`（每地面 tick）。
+        编队成员计数/接触剔除由 air_ai 层消费（本层只管物理态）。
+        """
+        a = self.aircraft
+        if not a.active[air_idx] or int(a.state[air_idx]) == 5:
+            return
+        a.state[air_idx] = 5   # CRASHING
+        # 关闭父实体=该飞机的 RF emitter（机载雷达），尾焰 IR 保留残热
+        em = self.emitters
+        for e in em.active_indices():
+            e = int(e)
+            if int(em.parent_kind[e]) == 3 and int(em.parent_idx[e]) == air_idx \
+                    and int(em.band[e]) == 0:   # RF
+                em.deactivate(e)
+        self.events.emit("air_crash", {"aircraft": air_idx})
+
+    def _check_aircraft_crashes(self, dt: float) -> None:
+        """坠毁链：CRASHING 飞机触地 → 提交 SPHERE 爆炸（docs §7.4 坠毁链）。
+
+        触地判定：`pos.z ≤ 地面高度 + 机身半高`（span 高度场采样，无地形 → z≤0）。
+        爆炸走伤害提交池（对地装甲毁伤自然结算），随后残骸（active=False 终态）。
+        """
+        a = self.aircraft
+        if a is None:
+            return
+        crashing = a.active & (a.state == 5)
+        for idx in np.flatnonzero(crashing):
+            idx = int(idx)
+            gz = self._ground_z(float(a.pos[idx, 0]), float(a.pos[idx, 1]), 0.0)
+            if float(a.pos[idx, 2]) > gz + 2.0:
+                continue   # 还在空中坠落
+            # 触地 → 爆炸（对地毁伤走提交池）
+            if self.damage_pool is not None:
+                self.damage_pool.submit_damage(
+                    DamageKind.SPHERE,
+                    (float(a.pos[idx, 0]), float(a.pos[idx, 1]), gz),
+                    radius=25.0,
+                    pen_mm=80.0,
+                )
+            self.events.emit(
+                "aircraft_impact",
+                {"aircraft": idx, "x": float(a.pos[idx, 0]), "y": float(a.pos[idx, 1]), "z": gz},
+            )
+            # 残骸终态：失活（碰撞箱/辐射源由 sync 级联清理）
+            a.destroy(idx)
 
     # ------------------------------------------------------------------
     # 末敏弹扫描（Phase 6b 步骤 8，docs/phase6-guidance-pipeline.md §七）
@@ -703,6 +1325,81 @@ class FiringControl:
         return best
 
     # ------------------------------------------------------------------
+    # 曲射弹丸落地引爆（Phase 6c 步骤⑤，docs/phase6-ai-pipeline.md §六.1）
+    # ------------------------------------------------------------------
+
+    def _check_indirect_impact(self) -> None:
+        """曲射弹丸落地判定：弹丸 z ≤ 所在列地面高度 → 落地引爆。
+
+        地形碰撞对普通弹丸不命中（SAL 先例），故单独判引爆；无地形时
+        地面高度 = 落点参考高度（guid_target_pos.z，fire_indirect 写入）。
+        落地引爆 → 提交池 SPHERE + FRAG_CONE（Tick 末统一结算）。
+        """
+        p = self.projectiles
+        for proj in p.active_indices():
+            proj = int(proj)
+            if not p.indirect[proj]:
+                continue
+            ammo = self._ammo_of(proj)
+            if ammo is None:
+                continue
+            px = float(p.pos[proj, 0])
+            py = float(p.pos[proj, 1])
+            pz = float(p.pos[proj, 2])
+            gz = self._ground_z(px, py, float(p.guid_target_pos[proj, 2]))
+            if pz <= gz:
+                self._detonate_indirect(proj, px, py, gz)
+
+    def _detonate_indirect(
+        self, proj_idx: int, x: float, y: float, z: float
+    ) -> None:
+        """曲射弹丸落地引爆：球形爆破 + 破片锥 → 提交池（docs §七.1）。
+
+        破片锥方向 = 弹丸落地速度方向（半角 INDIRECT_FRAG_HALF_ANGLE_DEG，
+        比直射命中更张开）；SPHERE 是主杀伤（半径线性衰减）。
+        """
+        ammo = self._ammo_of(proj_idx)
+        owner = int(self.projectiles.owner[proj_idx])
+        if ammo is None:
+            self._destroy_projectile(proj_idx)
+            return
+        if ammo.blast_radius > 0.0 and ammo.blast_dmg > 0.0:
+            self.damage_pool.submit_damage(
+                DamageKind.SPHERE,
+                (x, y, z),
+                radius=float(ammo.blast_radius),
+                pen_mm=float(ammo.blast_dmg),
+            )
+        if ammo.frag_count > 0 and ammo.frag_dmg > 0.0:
+            vel = self.projectiles.vel[proj_idx]
+            vx = float(vel[0])
+            vy = float(vel[1])
+            vz = float(vel[2])
+            vn = float(np.sqrt(vx * vx + vy * vy + vz * vz))
+            if vn > 1e-9:
+                self.damage_pool.submit_damage(
+                    DamageKind.FRAG_CONE,
+                    (x, y, z),
+                    radius=float(ammo.blast_radius),
+                    pen_mm=float(ammo.frag_dmg),
+                    direction=(vx / vn, vy / vn, vz / vn),
+                    cone_angle=float(np.radians(INDIRECT_FRAG_HALF_ANGLE_DEG)),
+                    frag_count=int(ammo.frag_count),
+                )
+        self.events.emit(
+            "artillery_impact",
+            {
+                "proj": proj_idx,
+                "shooter": owner,
+                "x": x,
+                "y": y,
+                "z": z,
+                "ammo": ammo.ammo_id,
+            },
+        )
+        self._destroy_projectile(proj_idx)
+
+    # ------------------------------------------------------------------
     # 激光制导炸弹（Phase 6b 步骤 9，docs/phase6-guidance-pipeline.md §7.5）
     # ------------------------------------------------------------------
 
@@ -816,6 +1513,22 @@ class FiringControl:
                 self.armor.active,
             )
 
+        # 1.5 飞机爆轰结算（Phase 7，docs §7.4 ②：坠毁/AAM 近炸/炸弹对飞机）
+        if pool.active_count > 0 and self.aircraft is not None and self.aircraft.active_count > 0:
+            resolve_aircraft_area_damage(
+                pool.kind,
+                pool.center,
+                pool.radius,
+                pool.pen_mm,
+                pool.direction,
+                pool.cone_angle,
+                pool.active,
+                self.aircraft.pos,
+                self.aircraft.health,
+                self.aircraft.state,
+                self.aircraft.active,
+            )
+
         # 2. 区域毁伤导致的摧毁（Numba 只扣血，Python 补 destroy）
         self._finalize_area_kills()
 
@@ -847,6 +1560,17 @@ class FiringControl:
         for idx in np.flatnonzero(low):
             self._destroy_armor(int(idx), cause="blast")
 
+        # Phase 7：血量归零的飞机 → 坠毁（CRASHING，docs §7.4 ①）
+        if self.aircraft is not None:
+            air = self.aircraft
+            # 血量变化 → dmg_factor 分段退化（近炸/爆轰伤害也更新，docs §7.4 ①）
+            frac = air.health / 100.0
+            f = np.where(frac > 0.7, 1.0, np.where(frac > 0.4, 0.8, 0.6))
+            air.dmg_factor[:] = np.where(air.active, f, air.dmg_factor)
+            dead = air.active & (air.health <= 0.0) & (air.state != 6)
+            for idx in np.flatnonzero(dead):
+                self._begin_aircraft_crash(int(idx))
+
     # ------------------------------------------------------------------
     # 阶段状态机（Phase 6b：guid_stage / guid_override 传给控制回调的输入）
     # ------------------------------------------------------------------
@@ -865,6 +1589,10 @@ class FiringControl:
         detected = self._seeker_detect()
         p = self.projectiles
         for proj in p.active_indices():
+            proj = int(proj)
+            if p.indirect[proj]:
+                continue  # 曲射弹丸（步骤⑤）：纯弹道直线+重力，不进制导状态机
+                # （否则 BALLISTIC 阶段会被末敏弹的 z ≤ scan_altitude 误转 SCAN 悬停）
             stage = int(p.guid_stage[proj])
             ammo = self._ammo_of(proj)
             if ammo is None:
@@ -884,8 +1612,12 @@ class FiringControl:
                         self._stop_guidance(proj)
 
             elif stage == GuidanceStage.MEMORY:
-                if detected.get(proj, False) and self._terminal_ready(proj, ammo):
-                    self._relock_body(proj)  # 记忆飞行中重新检测到本体 → 末端引导
+                if detected.get(proj, False):
+                    # 记忆飞行中重新检测到目标：末端就锁定本体，否则回 TRACK 继续跟踪
+                    if self._terminal_ready(proj, ammo):
+                        self._relock_body(proj)
+                    else:
+                        p.guid_stage[proj] = int(GuidanceStage.TRACK)
                 elif self._memory_expired(proj):
                     self._stop_guidance(proj)  # 已到记忆点未命中 → 停导（脱靶回收）
 
@@ -931,8 +1663,35 @@ class FiringControl:
         fq = float(p.guid_filter_quality[proj_idx])
         seeker = ammo.seeker
 
-        # --- 主动发射-接收：主动雷达导引头（目标 = 装甲，RCS 反射）---
+        # --- 主动发射-接收：主动雷达导引头（目标 = 装甲 RCS 反射 / 飞机，Phase 7）---
         if seeker == SeekerType.ACTIVE_RADAR:
+            if int(p.guid_target_kind[proj_idx]) == 1 and self.aircraft is not None:
+                # 以弹丸位置为中心搜索（导引头实际视野；横切目标锁定坐标滞后）。
+                # 只排除飞机射手（owner_kind=1）：SAM 射手是装甲（owner_kind=0），
+                # 其索引与飞机池无关（跨池索引碰撞陷阱，Phase 7 防空修复）。
+                excl = int(p.owner[proj_idx]) if int(p.owner_kind[proj_idx]) == 1 else -1
+                t = self._find_nearest_air_target(
+                    np.array([sx, sy, sz], dtype=np.float32), SEEK_RADIUS_AIR_M,
+                    exclude=excl,
+                )
+                if t < 0:
+                    return False
+                tx = float(self.aircraft.pos[t, 0])
+                ty = float(self.aircraft.pos[t, 1])
+                tz = float(self.aircraft.pos[t, 2])
+                tv = self.aircraft.vel[t]
+                if not self._los(sx, sy, sz, tx, ty, tz):
+                    return False
+                dist = self._dist3(sx, sy, sz, tx, ty, tz)
+                # 飞机 RCS（战斗机默认 5 m²）；ECM 压制检测距离
+                max_r = radar_detection_range(float(self.aircraft.rcs[t])) * (
+                    1.0 - float(self.aircraft.ecm[t])
+                )
+                prob = radar_detection_probability(dist, max_r)
+                if self.rng.uniform() >= prob:
+                    return False
+                self._write_detected_pos(proj_idx, tx, ty, tz, fq, target_vel=tv)
+                return True
             t = self._find_nearest_armor(ref, SEEK_RADIUS_M)
             if t < 0:
                 return False
@@ -952,9 +1711,9 @@ class FiringControl:
             self._write_detected_pos(proj_idx, tx, ty, tz, fq)
             return True
 
-        # --- 被动接收：红外成像（目标 = 红外 emitter，cur_power 含残热）---
+        # --- 被动接收：红外成像（目标 = 红外 emitter / 热焰诱饵，选最热源，Phase 7 §11.3）---
         if seeker in (SeekerType.IR_IMAGING, SeekerType.TV_EO):
-            e = self._find_emitter(ref, EmitterBand.IR, EMITTER_KIND_IR_SOURCE, SEEK_RADIUS_M)
+            e = self._find_ir_hot(sx, sy, sz, SEEK_RADIUS_M)
             if e < 0:
                 return False
             ex = float(self.emitters.pos[e, 0])
@@ -1034,6 +1793,35 @@ class FiringControl:
                 best = int(idx)
         return best
 
+    def _find_nearest_air_target(
+        self, ref: np.ndarray, seek_radius: float, exclude: int = -1
+    ) -> int:
+        """在 ref 附近 seek_radius 内搜最近活跃飞机（AAM 目标源，docs §7.2）。
+
+        坠毁/驻停机不选（已失控，打它无意义）；`exclude` 排除射手自身
+        （发射瞬间弹丸与射手同点，否则导引头锁自己）。
+        """
+        a = self.aircraft
+        if a is None:
+            return -1
+        best = -1
+        best_d = seek_radius * seek_radius
+        for idx in a.active_indices():
+            idx = int(idx)
+            if idx == exclude:
+                continue
+            st = int(a.state[idx])
+            if st == 5 or st == 6:   # CRASHING / PARKED
+                continue
+            dx = a.pos[idx, 0] - ref[0]
+            dy = a.pos[idx, 1] - ref[1]
+            dz = a.pos[idx, 2] - ref[2]
+            d2 = dx * dx + dy * dy + dz * dz
+            if d2 <= best_d:
+                best_d = d2
+                best = idx
+        return best
+
     def _find_emitter(
         self, ref: np.ndarray, band: int, kind_filter: int, seek_radius: float
     ) -> int:
@@ -1055,15 +1843,50 @@ class FiringControl:
                 best = int(e)
         return best
 
+    def _find_ir_hot(self, sx: float, sy: float, sz: float, seek_radius: float) -> int:
+        """红外导引头目标选择：**最热源**（含热焰诱饵，docs §11.3）。
+
+        红外导引头本质锁最热源——flare（DECOY）瞬时高 `cur_power` 应胜出，
+        与 `_find_emitter`（最近）不同：诱饵闭环 = 目标选择列表纳入 DECOY +
+        按功率竞争（原只搜 `kind=IR_SOURCE` 最近 → 诱饵无法诱骗）。
+        """
+        em = self.emitters
+        best = -1
+        best_power = 0.0
+        best_d = seek_radius * seek_radius
+        for e in em.active_indices():
+            if int(em.band[e]) != int(EmitterBand.IR):
+                continue
+            if em.kind[e] not in (EMITTER_KIND_IR_SOURCE, EMITTER_KIND_DECOY):
+                continue
+            dx = em.pos[e, 0] - sx
+            dy = em.pos[e, 1] - sy
+            dz = em.pos[e, 2] - sz
+            d2 = dx * dx + dy * dy + dz * dz
+            if d2 > best_d:
+                continue
+            p = float(em.cur_power[e])
+            if p > best_power:
+                best_power = p
+                best = int(e)
+        return best
+
     def _write_detected_pos(
-        self, proj_idx: int, x: float, y: float, z: float, filter_quality: float
+        self, proj_idx: int, x: float, y: float, z: float, filter_quality: float,
+        target_vel: np.ndarray | None = None,
     ) -> None:
-        """写检测坐标（滤波加噪声：σ ∝ (1-filter_quality)，体现导弹优劣）。"""
+        """写检测坐标（滤波加噪声：σ ∝ (1-filter_quality)，体现导弹优劣）。
+
+        Phase 7：`target_vel` 非 None 时同时写 guid_target_vel（AAM 打高速飞机，
+        PN 前置量依赖真实目标速度，docs §7.2）。
+        """
         sigma = max(0.0, 1.0 - filter_quality) * 2.0
         if sigma > 1e-6:
             x += self.rng.normal(0.0, sigma)
             y += self.rng.normal(0.0, sigma)
         self.projectiles.guid_target_pos[proj_idx] = (x, y, z)
+        if target_vel is not None:
+            self.projectiles.guid_target_vel[proj_idx] = target_vel
 
     def _terminal_ready(self, proj_idx: int, ammo: Any) -> bool:
         """末端引导触发：terminal_seeker 有效且弹丸到锁定坐标 < terminal_range_m。"""
@@ -1523,12 +2346,18 @@ class FiringControl:
                     p.age[i] += TICK_BULLET
                 continue
             if p.age[i] > PROJECTILE_MAX_AGE:
-                stale.append(i)
+                # 曲射弹丸：弹道必落点，寿命放宽到 INDIRECT_MAX_AGE
+                # （45° 高抛长射程 T 可达 ~55s，> 直射 20s 上限）
+                if not p.indirect[i] or p.age[i] > INDIRECT_MAX_AGE:
+                    stale.append(i)
                 continue
             p.age[i] += TICK_BULLET
             px, py, _ = p.pos[i]
             if abs(px) > WORLD_BOUND or abs(py) > WORLD_BOUND:
-                stale.append(i)
+                # 曲射弹丸豁免出界回收（Phase 6c 步骤⑤）：弹道必落点
+                # （落点引爆 _check_indirect_impact 判定），仅受 max age 约束
+                if not p.indirect[i]:
+                    stale.append(i)
         for i in stale:
             owner = int(p.owner[i])
             self.events.emit("miss", {"proj": i, "shooter": owner})

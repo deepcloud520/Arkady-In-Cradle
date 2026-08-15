@@ -613,3 +613,52 @@
 - 测试脚本 TerrainConfig → TerrainFactoryConfig（test_terrain / integration_heightfield / profile_terrain_load / diag_bridge_patch）
 - 验证：217 passed；生产包/模块/re-export 三路导入一致；default/flat/fbm 场景可用
 - **去别名（用户拍板）**：删除 `TerrainConfig = TerrainFactoryConfig` 别名（factory.py / __init__.py / tests re-export 全清），`TerrainConfig` 全项目零残留；217 passed
+
+---
+
+## 2026-08-16 Phase 7 空中部队全量实施完成（已归档，见主 dev-progress 2026-08-17 前的记录）
+
+# 开发进度
+
+## 2026-08-16 Phase 7 空中部队全量实施完成（docs/phase7-air-pipeline.md §十四 步骤①~⑪）
+
+> 空中部队 = 6b 制导管线 + 6c 编队 AI 框架 + EmitterPool 电磁世界的「泛化消费者」，
+> 净新增五块：AircraftPool / 气动飞控内核 / 空中 AI / 坠毁链 / 航空弹药。全量 573+ 测试通过。
+
+### 新增文件
+- `movement/aerodynamics.py`：点质量 3-DOF + 「解 α」升力/阻力闭环（大气指数衰减、过载/失速/坠毁分支、TAKOFF 滑跑豁免、PARKED 静止）
+- `movement/flight_control.py`：三通道定高定航（高度/油门 PI/航路点转向）+ 机动原语（lead pursuit / kinematic defeat / 俯冲-拉起）+ `build_air_movement_hook`
+- `simulation/air_ai.py`：`gather_air_contacts`（机载雷达搜索，复用 6b 检测层）+ `AirFormationAI`（意图 FSM + 贪心两轮分配 + 队形）+ `AirUnitAI`（OODA 空战/对地/返航）+ `AirbaseConfig/AirfieldOps`（起降闭环）+ `AirDefenseController`（防空 role=3 激活）+ `score_air_targets` 内核
+- `combat/aircraft.py`：`AircraftConfig`（机型静态参数，YAML→Pydantic）
+- 测试：`test_phase7_pool/aero/flight/sensor/formation/air_ai/aam/crash/takeoff/sead/integration.py`（10 文件）+ `tests/benchmark_phase7.py`
+
+### 关键接缝改动（追加不重排，旧存档/旧测试兼容）
+- `entities/pools.py`：`AircraftPool`（128）/`AirFormationPool`（32）+ `leader_idx`；`PartType.AIRCRAFT=5`；`BoxPool.parent_kind`（0=装甲 1=飞机）；`EmitterPool.EMITTER_PARENT_AIRCRAFT=3` + `activate_aircraft_radar/ir`；`ProjectilePool.guid_target_vel/guid_target_kind/owner_kind`
+- `movement/integrate.py`：`integrate_guided_projectile_movement` 加 `guid_target_vel/guid_target_kind`（AAM 前置量 + 空中目标重力补偿；地面目标行为逐位不变）
+- `combat/guidance.py`：`control_glide_bomb`（末尾注册，索引 4）
+- `combat/engagement.py`：`fire_air()`（飞机开火）+ `_seeker_probe` 飞机目标分支（`_find_nearest_air_target`，排除射手按 `owner_kind`）+ 近炸引信 `_prox_fuse_check` + 飞机毁伤 `_resolve_aircraft_hit`/坠毁链 `_begin_aircraft_crash`/`_check_aircraft_crashes` + 自伤不销毁修复
+- `combat/collision.py`：`detect_proj_aircraft_batch`（弹丸 vs 飞机箱全对全）
+- `combat/damage_submission.py`：`resolve_aircraft_area_damage`（飞机爆轰结算，装甲路径零侵入）
+- `detection/sensors.py`：`RCS_FIGHTER/BOMBER`
+- `simulation/ai.py`：`RWRDetector` 泛化到飞机（`rwr_state` 0~3 分档，`_emitter_side` 飞机分支）
+- `simulation/loop.py`：调度链插入 `air_movement`（0.1s）/`air_ai`（1s）——「飞→探测→AI→开火→弹丸推进」因果序
+- `simulation/serialization.py`：飞机/编队/弹丸新字段序列化往返
+
+### 修复的跨池索引碰撞陷阱（Phase 7 防空特有）
+- SAM 射手是装甲（owner 索引在 armor 池），目标飞机索引可能同值 → `_find_nearest_air_target`/`_prox_fuse_check` 排除射手误排除目标。修复 = `ProjectilePool.owner_kind`（0=装甲 1=飞机）区分射手空间
+
+### 物理调参记录
+- AAM/SAM 搜索半径 `SEEK_RADIUS_AIR_M=12000`（防空导弹地面雷达引导，末段覆盖全射程）
+- AAM 近炸 `prox_fuse_radius=25`（AIM-120 破片散布）；近炸 SPHERE 半径 `max(blast_radius, trigger)`（破片覆盖 ≥ 引信圈）
+- 空中目标重力补偿（`guid_target_kind==1` → accel[2]+=g）：横切/悬停目标才能命中（40g 转弯半径 ~4.7km 物理限制，横切仍低命中——真实兵棋亦然）
+
+### 性能基准（tests/benchmark_phase7.py，全部达标 ✅）
+- 气动积分 128 架 × 0.1s tick：0.014ms（目标 < 0.05ms）
+- 近炸判定 128 AAM × 128 飞机：0.06ms（目标 < 0.1ms）
+- 完整空战帧（128 架 + 战斗推进 0.1s）：2.7ms（目标 < 5ms）
+
+### 遗留（Phase 8 数据链，接口已预留）
+- 接触源换孪生数据：`AirFormationAI` 的 `gather_air_contacts` 注入点（`contact_provider`）
+- A 导 B 射 / 磨盘战术：`score_air_targets` + 编队意图已留扩展
+- 起降为闭环简化（跑道 = 配置坐标，不建模跑道物理）；编队 AI 的 RTB→分组降落接线待场景装配
+

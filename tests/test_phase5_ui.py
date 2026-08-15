@@ -14,11 +14,11 @@ from Airis.render.picking import pick_nearest, project_world
 
 
 def _make_adapter() -> WorldAdapter:
-    """构造一个最小 WorldAdapter（3 单位：友军/敌军/中立 + 后勤）。"""
+    """构造一个最小 WorldAdapter（3 单位：北约/华约/中立 + 后勤）。"""
     n = 8
     pos = np.zeros((n, 3), dtype=np.float32)
-    pos[0] = (0.0, 0.0, 0.0)   # 友军 @ 原点
-    pos[1] = (2.0, 0.0, 0.0)   # 敌军 @ x=2
+    pos[0] = (0.0, 0.0, 0.0)   # 北约 @ 原点
+    pos[1] = (2.0, 0.0, 0.0)   # 华约 @ x=2
     pos[2] = (0.0, 2.0, 0.0)   # 中立 @ y=2
     active = np.array([True, True, True, False, False, False, False, False])
     side = np.array([0, 1, 2, 0, 0, 0, 0, 0], dtype=np.uint8)
@@ -174,8 +174,8 @@ def test_adapter_unit_name_and_side():
     assert adapter.unit_name(0) == "T-90 #00"
     assert adapter.unit_name(1) == "T-72B3 #01"
     assert adapter.unit_name(2) == "载具 #02"
-    assert adapter.side_name(0) == "友军"
-    assert adapter.side_name(1) == "敌军"
+    assert adapter.side_name(0) == "北约"
+    assert adapter.side_name(1) == "华约"
 
 
 def test_adapter_ammo_fuel_at():

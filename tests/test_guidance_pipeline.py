@@ -200,8 +200,13 @@ class TestMissileControlRegistry:
     def test_builtin_fixed_order(self) -> None:
         """读档确定性：with_builtin 固定注册顺序（docs §2.5）。"""
         reg = MissileControlRegistry.with_builtin()
-        assert reg.ids() == ["boost_coast_pn", "dual_pulse_pn", "boost_coast_pp", "sfm_ballistic"]
+        # Phase 7：glide_bomb 追加在末尾（读档索引稳定，前 4 索引不变）
+        assert reg.ids() == [
+            "boost_coast_pn", "dual_pulse_pn", "boost_coast_pp",
+            "sfm_ballistic", "glide_bomb",
+        ]
         assert reg.index_of("sfm_ballistic") == 3  # 末敏弹有函数索引
+        assert reg.index_of("glide_bomb") == 4     # Phase 7 滑翔弹
 
 
 # ===========================================================================
@@ -345,24 +350,26 @@ def _make_guided_buffers(n: int = 1):
     active = np.ones(n, np.bool_)
     age = np.zeros(n, np.float32)
     gtp = np.zeros((n, 3), np.float32)
+    gtv = np.zeros((n, 3), np.float32)     # Phase 7：目标速度
+    gtk = np.zeros(n, np.int8)             # Phase 7：目标种类（0=地面）
     gmp = np.zeros((n, 3), np.float32)
     stage = np.zeros(n, np.int32)
     gain = np.full(n, 3.0, np.float32)
     ovr = np.zeros(n, np.int32)
     sfov = np.ones(n, np.float32)
     tfov = np.ones(n, np.float32)
-    return pos, vel, active, age, gtp, gmp, stage, gain, ovr, sfov, tfov
+    return pos, vel, active, age, gtp, gtv, gtk, gmp, stage, gain, ovr, sfov, tfov
 
 
 class TestGuidedKernel:
     def test_ballistic_like_straight(self) -> None:
         """BALLISTIC：直线 + 重力，与 guid_law=-1 直线积分一致（回归）。"""
-        pos, vel, active, age, gtp, gmp, stage, gain, ovr, sfov, tfov = _make_guided_buffers()
+        pos, vel, active, age, gtp, gtv, gtk, gmp, stage, gain, ovr, sfov, tfov = _make_guided_buffers()
         pos[0] = (0.0, 0.0, 100.0)
         vel[0] = (100.0, 0.0, 0.0)
         stage[0] = int(GuidanceStage.BALLISTIC)
         integrate_guided_projectile_movement(
-            pos, vel, active, age, gtp, gmp, stage, gain, ovr, sfov, tfov,
+            pos, vel, active, age, gtp, gtv, gtk, gmp, stage, gain, ovr, sfov, tfov,
             392.4, 0.1, 9.81, control_sfm_ballistic,
         )
         # 直线 + 重力（垂直速度被重力拉低）
@@ -371,12 +378,12 @@ class TestGuidedKernel:
 
     def test_scan_hovers(self) -> None:
         """SCAN：悬停（位置/速度不变）。"""
-        pos, vel, active, age, gtp, gmp, stage, gain, ovr, sfov, tfov = _make_guided_buffers()
+        pos, vel, active, age, gtp, gtv, gtk, gmp, stage, gain, ovr, sfov, tfov = _make_guided_buffers()
         pos[0] = (100.0, 50.0, 80.0)
         vel[0] = (20.0, -5.0, 3.0)
         stage[0] = int(GuidanceStage.SCAN)
         integrate_guided_projectile_movement(
-            pos, vel, active, age, gtp, gmp, stage, gain, ovr, sfov, tfov,
+            pos, vel, active, age, gtp, gtv, gtk, gmp, stage, gain, ovr, sfov, tfov,
             392.4, 0.1, 9.81, control_sfm_ballistic,
         )
         assert pos[0, 0] == pytest.approx(100.0)
@@ -384,13 +391,13 @@ class TestGuidedKernel:
 
     def test_track_guides_to_target(self) -> None:
         """TRACK：控制回调制导——弹丸偏转向目标。"""
-        pos, vel, active, age, gtp, gmp, stage, gain, ovr, sfov, tfov = _make_guided_buffers()
+        pos, vel, active, age, gtp, gtv, gtk, gmp, stage, gain, ovr, sfov, tfov = _make_guided_buffers()
         pos[0] = (0.0, 0.0, 0.0)
         vel[0] = (100.0, 0.0, 0.0)
         gtp[0] = (500.0, 0.0, 0.0)  # 目标正前方
         stage[0] = int(GuidanceStage.TRACK)
         integrate_guided_projectile_movement(
-            pos, vel, active, age, gtp, gmp, stage, gain, ovr, sfov, tfov,
+            pos, vel, active, age, gtp, gtv, gtk, gmp, stage, gain, ovr, sfov, tfov,
             392.4, 0.1, 9.81, control_pn_only,
         )
         # 位置推进（x 增），y 不变（目标在正前方，PN 零横向）
@@ -404,7 +411,7 @@ class TestGuidedKernel:
         d0 = np.linalg.norm(pos[0] - gtp[0])
         for _ in range(50):
             integrate_guided_projectile_movement(
-                pos, vel, active, age, gtp, gmp, stage, gain, ovr, sfov, tfov,
+                pos, vel, active, age, gtp, gtv, gtk, gmp, stage, gain, ovr, sfov, tfov,
                 392.4, 0.1, 9.81, control_pn_only,
             )
         d1 = np.linalg.norm(pos[0] - gtp[0])
@@ -412,14 +419,14 @@ class TestGuidedKernel:
 
     def test_fov_gate_straight(self) -> None:
         """FOV 门限：目标超出接收视场 → 停导直射（docs §4.2）。"""
-        pos, vel, active, age, gtp, gmp, stage, gain, ovr, sfov, tfov = _make_guided_buffers()
+        pos, vel, active, age, gtp, gtv, gtk, gmp, stage, gain, ovr, sfov, tfov = _make_guided_buffers()
         pos[0] = (0.0, 0.0, 0.0)
         vel[0] = (100.0, 0.0, 0.0)
         gtp[0] = (0.0, 1000.0, 0.0)  # 侧面远目标（与速度方向夹角 90°）
         stage[0] = int(GuidanceStage.TRACK)
         tfov[0] = float(np.cos(np.radians(10.0)))  # 窄跟踪视场 10°
         integrate_guided_projectile_movement(
-            pos, vel, active, age, gtp, gmp, stage, gain, ovr, sfov, tfov,
+            pos, vel, active, age, gtp, gtv, gtk, gmp, stage, gain, ovr, sfov, tfov,
             392.4, 0.1, 9.81, control_pn_only,
         )
         # 停导直射：只前进 x，不转向 y
@@ -428,14 +435,14 @@ class TestGuidedKernel:
 
     def test_max_accel_saturation(self) -> None:
         """执行器饱和：总加速度被 max_accel 截断。"""
-        pos, vel, active, age, gtp, gmp, stage, gain, ovr, sfov, tfov = _make_guided_buffers()
+        pos, vel, active, age, gtp, gtv, gtk, gmp, stage, gain, ovr, sfov, tfov = _make_guided_buffers()
         pos[0] = (0.0, 0.0, 0.0)
         vel[0] = (100.0, 0.0, 0.0)
         gtp[0] = (500.0, 0.0, 0.0)
         stage[0] = int(GuidanceStage.TRACK)
         low_accel = 10.0  # 远小于 boost 推力 294 → 必须被截断
         integrate_guided_projectile_movement(
-            pos, vel, active, age, gtp, gmp, stage, gain, ovr, sfov, tfov,
+            pos, vel, active, age, gtp, gtv, gtk, gmp, stage, gain, ovr, sfov, tfov,
             low_accel, 0.01, 9.81, control_boost_coast_pn,
         )
         # 速度增量 = 加速度*dt ≤ low_accel*dt
@@ -783,3 +790,4 @@ class TestPipelineE2E:
         fc._step_sub(0.01)
         # 检测失败 + memory_mode=False → guid_law=-1（停导，走直线积分）
         assert fc.projectiles.guid_law[proj] == -1
+

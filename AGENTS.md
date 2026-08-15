@@ -387,8 +387,10 @@ core → coordinates → terrain → entities → movement → detection → com
 | 2 | 实体/移动/检测模块 | 4周 | ✅ 已完成（2026-08-11） |
 | 3 | 战斗/后勤/模拟循环 | 4周 | ✅ 已完成（2026-08-11） |
 | 4 | 叙事层集成 | 3周 | 🔄 骨架已实现（2026-08-12；4b UI 暂缓） |
-| 5 | UI 集成与主题商店 | 3周 | 🔄 进行中（5a 管线骨架完成 2026-08-13；5b 面板待办） |
-| 6 | 完整场景与测试套件 | 2周 | 未开始 |
+| 5 | UI 集成与主题商店 | 3周 | ✅ 5a-5e 全部完成（2026-08-13~15，docs/phase5-ui-pipeline-design.md） |
+| 6 | 完整场景与测试套件 | 2周 | 🔄 6b/6c 已实施（2026-08-14），场景/压测/文档待补 |
+| 7 | 空中部队设计 | 3周 | ✅ 全量实施完成（2026-08-16，docs/phase7-air-pipeline.md 步骤①~⑪） |
+| 8 | 数据链体系作战 | 待补 | ✅ ①~⑧⑩ 实施完成（2026-08-17，docs/phase8-datalink-design.md；磨盘⑨留待后续） |
 
 > 📌 **Phase 6b（导弹制导，独立于上表 Phase 6）**：制导律脚本化 + 电子战闭环 + 末敏弹
 > （`combat/sfm.py`）+ 激光制导炸弹（`combat/sal.py`）**已全部实施** ✅
@@ -396,10 +398,13 @@ core → coordinates → terrain → entities → movement → detection → com
 >
 > 📌 **Phase 6c（剩余子系统 AI，独立于上表 Phase 6）**：设计定稿 `docs/phase6-ai-design.md`；
 > 实施级管线 `docs/phase6-ai-pipeline.md`（步骤 ①~⑩）——**步骤 ① SoA 扩展 + ② 编队 AI
-> 指挥链/单位 AI 执行 + ③ 爆炸/毁伤提交池与弹药激活已完成** ✅
-> （2026-08-14，全量 402 测试全绿），**④ 攻顶 ATGM 与 ⑧ 巡飞弹/CAS 延后（不紧急）**，
-> ⑤⑥⑦⑨⑩ 未实施
-> （⑤ 炮兵 → ⑥ 反炮 → ⑦ 射界规避 → ⑨ 通信簇+RWR+诱饵 → ⑩ 测试场景/压测/文档）。
+> 指挥链/单位 AI 执行 + ③ 爆炸/毁伤提交池与弹药激活 + ⑤ 炮兵编队 AI 与曲射火控已完成** ✅
+> （2026-08-14，全量 421 测试全绿；⑤ 含 `fire_indirect` 弹道解算/落地引爆/`ArtilleryAI`
+> 友军与玩家 STRIKE 分派/loop command_handler 路由，`tests/test_phase6_artillery.py` 19 用例），
+> **④ 攻顶 ATGM 与 ⑧ 巡飞弹/CAS 延后（不紧急）**，⑥⑦⑩ 未实施；
+> ⑨ 通信簇+RWR+诱饵**已落地**（`RWRDetector` + `_deploy_decoy` +
+> `EmitterPool.deploy_decoy`，`tests/test_phase6_comms_rwr.py`）。
+> （⑥ 反炮 → ⑦ 射界规避 → ⑩ 测试场景/压测/文档）。
 
 ---
 
@@ -537,27 +542,28 @@ core → coordinates → terrain → entities → movement → detection → com
 
 ---
 
-#### Phase 5：UI（3周）
+#### Phase 5：UI（3周）✅ 已完成（5a~5e，2026-08-13~15，详见 docs/phase5-ui-pipeline-design.md）
 
 **目标**：完整的玩家界面 +。
 
 **任务清单**：
-- [ ] 实现 `ui/main_window.py`（QMainWindow 主窗口布局，包括“选择测试地图生成器”）
-- [ ] 实现 `ui/views.py`（战术地图、对话面板（仅预留骨架，UI细节留以后）、档案库（仅预留骨架，UI细节留以后））
-- [ ] 实现至少 3 个shader主题：构成主义、日系动漫
-- [ ] 实现 `ui/shaders/` 目录管理（每个主题独立的 .frag 文件）
-- [ ] 实现 `ui/controls.py`（鼠标/键盘事件 → 叙事/命令队列）
-- [ ] 实现自由摄像机的 UI 控制（拖动、滚轮、旋转）
+- [x] 实现 `ui/main_window.py`（QMainWindow 主窗口布局：QSplitter 战场+侧栏、主题菜单、叙事菜单、状态栏；"选择测试地图生成器"由 `terrain/factory.py` 的 TerrainFactory 承担）
+- [x] 实现 `ui/views.py`（战术地图 + 对话面板 + 档案库）——实际拆分为独立面板文件：`ui/narrative_overlay.py`（对话）、`ui/archive_panel.py`（档案）、`ui/briefing_panel.py`（简报）、`ui/detail_panel.py`（详情，三级信息）
+- [x] 实现至少 3 个 shader 主题：default（现实军事）/ constructivism（构成主义）/ anime（日系动漫 cel+描边），见 `assets/shaders/<主题>/`
+- [x] 实现 shader 目录管理——`assets/shaders/`（每主题 `terrain.vert/frag` + `theme.toml`），`Airis/render/theme.py` ThemeManager 热切换
+- [x] 实现 `ui/controls.py`（键盘 → 叙事/命令队列：空格暂停 / 回车推进 / 1-9 选选项 / S 跳过 / Ctrl+1/2/3 主题 / F1 帮助；鼠标事件在 `render/gl_widget.py`）
+- [x] 实现自由摄像机的 UI 控制（左键拖拽旋转、滚轮缩放，Phase 1 已有，Phase 5 接线拾取交互）
 
 **交付物**：
-- 完整 UI 布局（地图 + 对话面板 + 信息栏）
+- 完整 UI 布局（地图 + 对话面板 + 档案/简报/详情侧栏 + 日志叠加）
 - 主题切换菜单，切换时渲染风格实时变化
-- 所有交互事件正确传递到逻辑层
+- 所有交互事件正确传递到逻辑层（拾取 → 详情三级；对话选项 → CommandQueue）
+- Phase 5e 收尾：HUD 单位文字标签（字体图集）+ 弹道线 + 命中标记（渐隐）+ 损坏 ⚠ 摘要 + 单位真实速度（渲染层位置差分）+ 对话历史跨 Tab 保留
 
 **验收标准**：
-- 主题切换耗时 < 100ms（无卡顿）
-- UI 帧率 ≥ 30fps（地图渲染 + 对话面板）
-- 所有鼠标/键盘事件正确响应
+- 主题切换耗时 < 100ms（无卡顿）✅
+- UI 帧率 ≥ 30fps（地图渲染 + 对话面板）✅
+- 所有鼠标/键盘事件正确响应 ✅（5c 鼠标拾取 + 5e 键盘快捷键）
 
 ---
 
@@ -583,23 +589,39 @@ core → coordinates → terrain → entities → movement → detection → com
 - 所有模块单元测试通过
 - 性能压测结果符合设计目标（≥ 30fps 在 2048 装甲 + 16384 弹丸下）
 
-#### Phase 7：空中部队设计
+#### Phase 7：空中部队设计 ✅ 已完成（2026-08-16）
 **目标**： 与地面部队统一管线实现体系作战
+
+> 📌 **设计定稿（2026-08-14）**：`docs/phase7-air-design.md`——空中部队是 6b 制导管线 +
+> 6c 编队 AI 框架 + `EmitterPool` 电磁世界的「泛化消费者」，净新增只有 AircraftPool /
+> 气动飞控内核 / 空中 AI / 坠毁链五块；实施管线 `docs/phase7-air-pipeline.md`（步骤①~⑪
+> **全量落地**，2026-08-16；`Airis/lulilo/movement/aerodynamics.py` + `flight_control.py` +
+> `simulation/air_ai.py` + `combat/aircraft.py` + 10 个测试文件 + `tests/benchmark_phase7.py`）。
+
 **任务清单**：
 
-- [ ] 一般气动力学（不同迎风面的升力阻力）
-- [ ] 实现单位AI（定高定航，接受自由开火命令后，空战自主发现-攻击-规避-返航）
-- [ ] 实现编队 AI（编队飞行，分组降落）
-- [ ] 编写集成测试（完整战役流程自动化）
-- [ ] 性能测试
-- [ ] 准备多种弹头（红外/雷达AAM，激光AGM，反辐射，自由落体/滑翔炸弹）
+- [x] 一般气动力学（不同迎风面的升力阻力）——点质量 3-DOF + 「解 α」升力/阻力闭环（`movement/aerodynamics.py`）
+- [x] 实现单位AI（定高定航，接受自由开火命令后，空战自主发现-攻击-规避-返航）——`AirUnitAI`（OODA：占位追击/AAM 发射/弹尽或 bingo 返航）
+- [x] 实现编队 AI（编队飞行，分组降落）——`AirFormationAI`（意图 FSM + 贪心分配 + 楔形/纵队/横队）+ `AirfieldOps`（起降闭环）
+- [x] 编写集成测试（完整战役流程自动化）——`test_phase7_integration.py`（SimulationLoop 全链）
+- [x] 性能测试——`tests/benchmark_phase7.py`（气动 0.014ms / 近炸 0.06ms / 全帧 2.7ms 达标）
+- [x] 准备多种弹头（红外/雷达AAM，激光AGM，反辐射，自由落体/滑翔炸弹）——AAM（dual_pulse_pn + 近炸）、滑翔弹（`control_glide_bomb`）、SAM（防空）、反辐射/自由落体走既有 ARM/SAL/无制导路径
 
-#### Phase 8：数据链体系作战（待补）
-1. 参考：stochastic-warfare设计数据链，以数据链良好/观测良好实现战争迷雾（参考：docs\数据链与战争迷雾设计.md）
+#### Phase 8：数据链体系作战 ✅ ①~⑧⑩ 已完成（2026-08-17；磨盘⑨留待后续）
+
+> 📌 **设计定稿（2026-08-14）**：`docs/phase8-datalink-design.md`——认知孪生 TwinPool +
+> TwinEngine 四通道更新 + DataLinkNetwork（networkx 通信簇）+ 三军 AI 升级（装甲呼叫支援 /
+> 炮兵自主接单+反炮规避 / 空军 A导B射+协同规避）+ 编队战术库（磨盘等）。
+> **实施**：`entities/twin.py` + `simulation/twin_engine.py` + `simulation/datalink.py` +
+> `render/adapter.py from_snapshot_twin` + 三军 AI 升级 + 4 集成用例（MIA→KIA 时序 /
+> 呼叫炮兵闭环 / 链路中断自保 / A导B射）+ `tests/benchmark_phase8.py`。**磨盘战术（步骤⑨）
+> 按用户要求留待后续**（`AirTactic` 枚举位已预留）。
+
+1. 参考：stochastic-warfare设计数据链，以数据链良好/观测良好实现战争迷雾（参考：docs\数据链与战争迷雾设计.md）✅ 战争迷雾 = 孪生与物理偏差（TwinPool/TwinEngine）
 2. 对原有AI进行全面升级：
-    装甲部队：呼叫支援（友方陆军/炮兵/巡飞弹/CAS），态势感知分析规划作战目标
-    炮兵：自主接受友军请求打击指令并规避反炮
-    空军：数据链A导B射，超视距控制与规避导弹，编队选择战术（如磨盘战术）
+    装甲部队：呼叫支援（友方陆军/炮兵/巡飞弹/CAS），态势感知分析规划作战目标 ✅ 支援请求链（docs §5.2）
+    炮兵：自主接受友军请求打击指令并规避反炮 ✅ 订阅 support_request + 6c 反炮闭环
+    空军：数据链A导B射，超视距控制与规避导弹，编队选择战术（如磨盘战术）✅ A导B射（relay_guidance）+ 协同规避；磨盘战术留待后续
 ## 六、常见陷阱（必读）
 
 | 陷阱 | 解决方案 |
@@ -656,7 +678,7 @@ uv run python clear_numba_cache.py --all   # 连同 .pyc 一起清
 ## 九、非代码目录
 - `story/` —— Obsidian 世界观笔记（中文 markdown），非源码
 - `assets/shaders/`、`assets/textures/` —— 预留，当前为空
-- `docs/` —— 项目实现的技术细节文档（`heightfield-design.md`、`phase3-combat-design.md`、`phase4-narrative-design.md`、`phase5-ui-pipeline-design.md`、`phase6-guidance-design.md`、`phase6-guidance-pipeline.md`、`数据链与战争迷雾设计.md`）
+- `docs/` —— 项目实现的技术细节文档（`heightfield-design.md`、`phase3-combat-design.md`、`phase4-narrative-design.md`、`phase5-ui-pipeline-design.md`、`phase6-guidance-design.md`、`phase6-guidance-pipeline.md`、`phase6-ai-design.md`、`phase6-ai-pipeline.md`、`phase7-air-design.md`、`phase7-air-pipeline.md`、`phase8-datalink-design.md`、`数据链与战争迷雾设计.md`）
 - `Reference/` —— 参考数据与外部项目（武器数据库 CSV、参考实现）
 
 

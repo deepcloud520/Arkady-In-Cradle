@@ -6,11 +6,14 @@
     * 着色器外提：内联 VERTEX/FRAGMENT_SHADER → assets/shaders/<theme>/
     * 主题系统：ThemeManager 加载/热切换（默认 default 主题）
     * 渲染数据源：通过 WorldAdapter 读取单位数据（渲染层永不直读 Real SoA）
+    * HUD：单位状态圆点 + 选中高亮（5c）+ 文字标签/损坏摘要（5e）
+    * 战场特效：弹道线 / 命中标记（5e，EffectLayer 事件缓冲 + 渐隐）
 """
 from __future__ import annotations
 
 import logging
 import os
+import time
 
 import moderngl
 import numpy as np
@@ -21,7 +24,9 @@ from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from Airis.lulilo.terrain.map import TerrainMap
 from Airis.render.adapter import WorldAdapter
 from Airis.render.camera import OrbitCamera
+from Airis.render.effects import EffectLayer
 from Airis.render.hud.overlay import HUDOverlay
+from Airis.render.hud.text import FontAtlas, TextItem
 from Airis.render.picking import Picker, project_world
 from Airis.render.theme import Theme, ThemeManager
 
@@ -107,6 +112,9 @@ class GLWidget(QOpenGLWidget):
         self._mvp_bytes: bytes | None = None
         self._mvp = None                     # glm.mat4（拾取复用最近一帧 MVP）
 
+        # Phase 5e：战场特效缓冲（弹道线 / 命中标记）
+        self._effects = EffectLayer()
+
         self.ctx = None
         self.program = None
         self.hud: HUDOverlay | None = None
@@ -139,6 +147,16 @@ class GLWidget(QOpenGLWidget):
     def adapter(self) -> WorldAdapter | None:
         return self._adapter
 
+    def feed_effects(self, events: list[dict]) -> None:
+        """喂入一帧事件（Phase 5e：弹道线 / 命中标记缓冲）。
+
+        Args:
+            events: [{kind, data, ...}]——MainWindow 每帧 drain 后传入
+                （与 LogWidget 同一份，不新增数据流）。
+        """
+        if events:
+            self._effects.on_events(events, time.monotonic())
+
     def initializeGL(self):
         try:
             # require=460：显式请求 OpenGL 4.6 Core（配合 main.py 的 QSurfaceFormat）
@@ -159,7 +177,7 @@ class GLWidget(QOpenGLWidget):
             self.program = self.theme_manager.current.program
 
             self._build_meshes()
-            self.hud = HUDOverlay(self.ctx)
+            self.hud = HUDOverlay(self.ctx, FontAtlas(size=32))
             self.theme_manager.apply_uniforms()
         except Exception:
             logger.exception("initializeGL 失败")
@@ -307,6 +325,131 @@ class GLWidget(QOpenGLWidget):
         self.hud.render(
             screen[visible], colors[visible], viewport_w, viewport_h, pixel_radius=6.0
         )
+
+        # 3) Phase 5e：战场特效（弹道线 + 命中标记，按墙钟时间渐隐）
+        self._render_effects(viewport_w, viewport_h)
+
+        # 4) Phase 5e：单位文字标签 + 损坏 ⚠ 摘要（读 WorldAdapter）
+        self._render_labels(screen, idx, visible, viewport_w, viewport_h)
+
+    # ------------------------------------------------------------------
+    # Phase 5e：战场特效（弹道线 / 命中标记）
+    # ------------------------------------------------------------------
+
+    def _render_effects(self, viewport_w: int, viewport_h: int) -> None:
+        if self.hud is None or self._adapter is None or self._mvp is None:
+            return
+        now = time.monotonic()
+        self._effects.cull(now)
+        segs: list[list[float]] = []
+        seg_colors: list[tuple[float, float, float, float]] = []
+        rings: list[list[float]] = []
+        ring_colors: list[tuple[float, float, float]] = []
+
+        adapter = self._adapter
+        mvp = self._mvp
+
+        # 弹道线：射手 → 目标（位置渲染时刻解析，随生命周期渐隐）
+        for tr in self._effects.tracer_events:
+            age = now - tr.start
+            if tr.shooter < 0 or tr.target < 0:
+                continue
+            if tr.shooter >= adapter.armor_pos.shape[0] or tr.target >= adapter.armor_pos.shape[0]:
+                continue
+            p1 = adapter.armor_pos[tr.shooter]
+            p2 = adapter.armor_pos[tr.target]
+            s1, _, _, v1 = project_world(p1[None], mvp, viewport_w, viewport_h)
+            s2, _, _, v2 = project_world(p2[None], mvp, viewport_w, viewport_h)
+            if not (bool(v1[0]) and bool(v2[0])):
+                continue
+            alpha = max(0.0, 1.0 - age / max(tr.lifetime, 1e-6))
+            base = HUDOverlay.side_color(
+                int(adapter.armor_side[tr.shooter]) if tr.shooter < adapter.armor_side.shape[0] else 2
+            )
+            segs.append([float(s1[0, 0]), float(s1[0, 1]), float(s2[0, 0]), float(s2[0, 1])])
+            seg_colors.append((base[0], base[1], base[2], alpha))
+
+        # 命中标记：目标位置软边圆环（扩张渐隐）+ 十字
+        for hm in self._effects.hit_marks:
+            age = now - hm.start
+            if hm.target < 0 or hm.target >= adapter.armor_pos.shape[0]:
+                continue
+            p = adapter.armor_pos[hm.target]
+            s, _, _, vis = project_world(p[None], mvp, viewport_w, viewport_h)
+            if not bool(vis[0]):
+                continue
+            k = min(1.0, age / max(hm.lifetime, 1e-6))
+            radius = 12.0 + 26.0 * k           # 扩张
+            alpha = 1.0 - k                     # 渐隐
+            cx, cy = float(s[0, 0]), float(s[0, 1])
+            rings.append([cx, cy])
+            ring_colors.append((1.0, 0.72, 0.25))
+            # 十字（两条线段）
+            segs.append([cx - radius, cy, cx + radius, cy])
+            segs.append([cx, cy - radius, cx, cy + radius])
+            seg_colors.append((1.0, 0.72, 0.25, alpha))
+            seg_colors.append((1.0, 0.72, 0.25, alpha))
+
+        if segs:
+            self.hud.render_lines(
+                np.asarray(segs, dtype=np.float32),
+                np.asarray(seg_colors, dtype=np.float32),
+                viewport_w, viewport_h, width_px=2.0,
+            )
+        if rings:
+            self.hud.render_ring(
+                np.asarray(rings, dtype=np.float32),
+                np.asarray(ring_colors, dtype=np.float32),
+                viewport_w, viewport_h, pixel_radius=22.0,
+            )
+
+    # ------------------------------------------------------------------
+    # Phase 5e：单位文字标签 + 损坏摘要
+    # ------------------------------------------------------------------
+
+    def _render_labels(
+        self,
+        screen: np.ndarray,
+        idx: np.ndarray,
+        visible: np.ndarray,
+        viewport_w: int,
+        viewport_h: int,
+    ) -> None:
+        if self.hud is None or self.hud.text is None:
+            return
+        adapter = self._adapter
+        items: list[TextItem] = []
+        # 默认标签颜色（按阵营微调色相；选中单位亮黄）
+        for j in np.flatnonzero(visible):
+            unit_idx = int(idx[j])
+            sx, sy = float(screen[j, 0]), float(screen[j, 1])
+            is_selected = unit_idx == self._selected_idx
+            is_hovered = unit_idx == self._hover_idx
+            if is_selected:
+                color = (1.0, 0.88, 0.35)
+            elif is_hovered:
+                color = (1.0, 1.0, 0.85)
+            else:
+                base = HUDOverlay.side_color(
+                    int(adapter.armor_side[unit_idx])
+                    if unit_idx < adapter.armor_side.shape[0] else 2
+                )
+                color = (min(1.0, base[0] * 0.5 + 0.55),
+                         min(1.0, base[1] * 0.5 + 0.55),
+                         min(1.0, base[2] * 0.5 + 0.55))
+            items.append(TextItem(sx, sy - 18.0, adapter.unit_name(unit_idx), color, 11.0))
+            # 损坏部位摘要（仅损坏时显示，橙色 ⚠）
+            damaged = adapter.damaged_parts(unit_idx)
+            if damaged:
+                items.append(
+                    TextItem(
+                        sx, sy - 5.0,
+                        "⚠ " + " ".join(damaged),
+                        (1.0, 0.72, 0.30), 10.0,
+                    )
+                )
+        if items:
+            self.hud.text.render(items, viewport_w, viewport_h)
 
     def _dump_frame(self) -> None:
         """调试用：渲染后从当前 FBO 读回并保存（环境变量 AIRC_DUMP_FRAME=1 启用）。"""

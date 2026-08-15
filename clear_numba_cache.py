@@ -1,4 +1,4 @@
-"""自动清除 Numba 缓存脚本。
+"""自动清除 Numba和Python 缓存脚本。
 
 Numba 的 ``@njit(cache=True)`` 会把编译产物写到各模块 ``__pycache__`` 目录下，
 文件名为 ``<module>.<funcname>-<lineno>.py<ver>.<n>.nbc`` / ``.nbi``。

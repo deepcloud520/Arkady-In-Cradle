@@ -20,6 +20,7 @@ from typing import Any
 import numpy as np
 
 from Airis.lulilo.entities.pools import PartType
+from Airis.lulilo.entities.side import SideNameMapper
 from Airis.lulilo.simulation.state import SimulationSnapshot
 
 logger = logging.getLogger(__name__)
@@ -27,9 +28,10 @@ logger = logging.getLogger(__name__)
 # 部位名称（对应 PartType 顺序，与 armor_damaged_parts 的 5 列一一对应）
 PART_NAMES = ("车体", "炮塔", "引擎", "履带", "弹药架")
 
-# 阵营 → 单位型号 / 名称（渲染层命名规则，不碰引擎；Phase 8 正式接入 side 后替换）
+# 阵营 → 单位型号（渲染层命名规则，不碰引擎；Phase 8 接入 name 字段后替换）
 _SIDE_MODEL = {0: "T-90", 1: "T-72B3", 2: "载具"}
-_SIDE_NAME = {0: "友军", 1: "敌军", 2: "中立"}
+# 阵营显示名统一走 entities.side（SideNameMapper：0=北约 1=华约 2=中立）
+_SIDE_NAMES = SideNameMapper()
 
 
 class UnitRenderStatus(IntEnum):
@@ -39,6 +41,34 @@ class UnitRenderStatus(IntEnum):
     UNKNOWN = 1   # Phase 8：变成问号
     KIA = 2       # Phase 8：确认击毁
     MIA = 3       # Phase 8：信号丢失
+
+
+# Phase 8：孪生状态 + 置信度 → 渲染状态（docs §4.1 映射表）
+def map_twin_render_status(status: int, confidence: float) -> UnitRenderStatus:
+    """孪生状态 → 渲染状态（TwinStatus + confidence 分档，docs §4.1）。
+
+    | TwinStatus | confidence | 渲染 |
+    |---|---|---|
+    | ACTIVE | > 0.8 | ACTIVE（完整模型 + 高亮） |
+    | ACTIVE | 0.5~0.8 | ACTIVE（半透明 + 抖动，pos_err 驱动） |
+    | ACTIVE | < 0.5 | UNKNOWN（模糊接触框） |
+    | UNKNOWN | — | UNKNOWN（「?」标记） |
+    | KIA | — | KIA（残骸 + 红叉） |
+    | MIA | — | MIA（灰色轮廓 + 闪烁） |
+    """
+    from Airis.lulilo.entities.twin import TwinStatus
+
+    st = int(status)
+    if st == int(TwinStatus.KIA):
+        return UnitRenderStatus.KIA
+    if st == int(TwinStatus.MIA):
+        return UnitRenderStatus.MIA
+    if st == int(TwinStatus.UNKNOWN):
+        return UnitRenderStatus.UNKNOWN
+    # ACTIVE：按置信度分档（< 0.5 降为模糊接触框）
+    if confidence < 0.5:
+        return UnitRenderStatus.UNKNOWN
+    return UnitRenderStatus.ACTIVE
 
 
 def _build_damaged_parts(
@@ -92,7 +122,7 @@ class WorldAdapter:
     armor_active: np.ndarray        # (N,)   bool   存活掩码
     armor_confidence: np.ndarray    # (N,)   float32 置信度（Phase 5 恒为 1.0）
     armor_status: np.ndarray        # (N,)   uint8   渲染状态（Phase 5 恒为 ACTIVE）
-    armor_side: np.ndarray          # (N,)   uint8   0=友军 / 1=敌军 / 2=中立
+    armor_side: np.ndarray          # (N,)   uint8   绝对阵营（Side：0=北约 1=华约 2=中立）
     armor_damaged_parts: np.ndarray  # (N, 5) bool   每单位 5 部位损坏掩码（PartType 顺序）
 
     # ── 部件详情（命中联动，HUD/详情面板读取）──
@@ -104,6 +134,9 @@ class WorldAdapter:
     ammo_capacity: np.ndarray | None = None   # (N,) float32 弹药上限
     fuel_reserve: np.ndarray | None = None    # (N,) float32 当前燃料
     fuel_capacity: np.ndarray | None = None   # (N,) float32 燃料上限
+    # ── 速度视图（可选；None = 未估计，speed_at 回退 0）──
+    # Phase 5e：渲染层位置差分估计（EMA 平滑），引擎侧无 velocity 字段
+    armor_speed: np.ndarray | None = None     # (N,) float32 水平速度 m/s
     sim_time: float = 0.0
     tick_count: int = 0
 
@@ -112,14 +145,23 @@ class WorldAdapter:
     # ------------------------------------------------------------------
 
     @classmethod
-    def from_snapshot(cls, snapshot: SimulationSnapshot) -> "WorldAdapter":
+    def from_snapshot(
+        cls,
+        snapshot: SimulationSnapshot,
+        armor_speed: np.ndarray | None = None,
+    ) -> "WorldAdapter":
         """从模拟快照构造（Phase 5 透传模式）。
+
+        Args:
+            snapshot: 模拟快照。
+            armor_speed: 可选的水平速度数组 (N,) float32
+                （Phase 5e：渲染层位置差分估计，引擎无 velocity 字段）。
 
         Note:
             - 直接引用 SoA 数组，不拷贝（浅视图）
             - confidence 恒 1.0 / status 恒 ACTIVE（上帝视角）
-            - armor.team：Phase 6c 正式下沉为 SoA 字段（docs/phase6-ai-design.md §1.1）；
-              通过 getattr 读取，缺失时回退旧动态 side 属性，再缺失全 0（友军）
+            - armor.side：绝对阵营 SoA 字段（entities/side.py Side 枚举）；
+              通过 getattr 读取，缺失时全 0（北约）
         """
         armor = snapshot.pools.get("armor")
         box = snapshot.pools.get("box")
@@ -152,11 +194,9 @@ class WorldAdapter:
                 tick_count=snapshot.tick_count,
             )
 
-        side = getattr(armor, "team", None)
+        side = getattr(armor, "side", None)
         if side is None:
-            side = getattr(armor, "side", None)  # 兼容旧动态属性（Phase 6c 前演示）
-        if side is None:
-            side = np.zeros(n, dtype=np.uint8)
+            side = np.zeros(n, dtype=np.uint8)  # 缺失兜底：全北约
         pitch = getattr(armor, "pitch", None)
         if pitch is None:
             pitch = np.zeros(n, dtype=np.float32)
@@ -186,6 +226,7 @@ class WorldAdapter:
             ammo_capacity=ammo_st.capacity if ammo_st is not None else None,
             fuel_reserve=fuel_st.reserve if fuel_st is not None else None,
             fuel_capacity=fuel_st.capacity if fuel_st is not None else None,
+            armor_speed=armor_speed,
             sim_time=snapshot.sim_time,
             tick_count=snapshot.tick_count,
         )
@@ -193,6 +234,82 @@ class WorldAdapter:
     # ------------------------------------------------------------------
     # 查询接口（下游消费者唯一入口）
     # ------------------------------------------------------------------
+
+    @classmethod
+    def from_snapshot_twin(
+        cls,
+        snapshot: SimulationSnapshot,
+        twin: Any,
+    ) -> "WorldAdapter":
+        """从模拟快照 + 认知孪生构造（Phase 8 战争迷雾模式，docs §4.1）。
+
+        - 单位位置 = `twin.pos`（带误差，真值不进 adapter）；
+        - 渲染状态 = `map_twin_render_status(twin.status, twin.confidence)`
+          （ACTIVE/UNKNOWN/KIA/MIA 映射）；
+        - 血量 = `twin.health`（报告值，可能滞后）；
+        - 活跃掩码 = 孪生 active（残骸/失联单位仍渲染为 KIA/MIA 状态）。
+        物理装甲数组（pos/yaw/pitch/roll/active）仍来自 armor（只读引用，
+        供碰撞/选择联动；渲染位置以 twin.pos 为准）。
+        """
+        armor = snapshot.pools.get("armor")
+        box = snapshot.pools.get("box")
+        n = armor.capacity if armor is not None else 0
+
+        ammo_mgr = snapshot.logistics.get("ammo")
+        fuel_mgr = snapshot.logistics.get("fuel")
+        ammo_st = ammo_mgr.state if ammo_mgr is not None else None
+        fuel_st = fuel_mgr.state if fuel_mgr is not None else None
+
+        if armor is None or twin is None:
+            return cls.from_snapshot(snapshot)
+
+        side = getattr(armor, "side", None)
+        if side is None:
+            side = np.zeros(n, dtype=np.uint8)
+        pitch = getattr(armor, "pitch", None)
+        if pitch is None:
+            pitch = np.zeros(n, dtype=np.float32)
+        roll = getattr(armor, "roll", None)
+        if roll is None:
+            roll = np.zeros(n, dtype=np.float32)
+
+        # 孪生视图（armor 槽位 = twin[0..n)）
+        twin_confidence = np.zeros(n, dtype=np.float32)
+        twin_status = np.zeros(n, dtype=np.uint8)
+        twin_health = np.zeros(n, dtype=np.float32)
+        if twin.capacity >= n:
+            twin_confidence[:n] = twin.confidence[:n]
+            twin_status[:n] = twin.status[:n]
+            twin_health[:n] = twin.health[:n]
+
+        # 渲染状态映射（向量化）
+        render_status = np.array([
+            int(map_twin_render_status(int(st), float(cf)))
+            for st, cf in zip(twin_status, twin_confidence)
+        ], dtype=np.uint8)
+
+        return cls(
+            armor_pos=twin.pos[:n] if twin.capacity >= n else armor.pos,
+            armor_yaw=armor.yaw,
+            armor_pitch=pitch,
+            armor_roll=roll,
+            armor_health=twin_health,          # 报告血量（滞后）
+            armor_active=armor.active,         # 物理存活（渲染残骸/失联依赖 status）
+            armor_confidence=twin_confidence,
+            armor_status=render_status,
+            armor_side=side,
+            armor_damaged_parts=_build_damaged_parts(box, armor.active, n),
+            box_parent=box.parent if box is not None else np.zeros(0, dtype=np.int32),
+            box_part=box.part if box is not None else np.zeros(0, dtype=np.int32),
+            box_active=box.active if box is not None else np.zeros(0, dtype=np.bool_),
+            ammo_reserve=ammo_st.reserve if ammo_st is not None else None,
+            ammo_capacity=ammo_st.capacity if ammo_st is not None else None,
+            fuel_reserve=fuel_st.reserve if fuel_st is not None else None,
+            fuel_capacity=fuel_st.capacity if fuel_st is not None else None,
+            armor_speed=None,
+            sim_time=snapshot.sim_time,
+            tick_count=snapshot.tick_count,
+        )
 
     @property
     def active_mask(self) -> np.ndarray:
@@ -232,6 +349,8 @@ class WorldAdapter:
             "active": self.armor_active,
             "side": self.armor_side,
             "damaged": self.armor_damaged_parts,
+            "confidence": self.armor_confidence,   # Phase 8：战争迷雾（0~1）
+            "status": self.armor_status,           # Phase 8：UnitRenderStatus（迷雾视觉）
             "count": self.unit_count(),
             "sim_time": self.sim_time,
             "tick_count": self.tick_count,
@@ -250,14 +369,24 @@ class WorldAdapter:
         return f"{model} #{unit_idx:02d}"
 
     def side_name(self, unit_idx: int) -> str:
-        """阵营名（友军 / 敌军 / 中立）。"""
+        """阵营显示名（北约 / 华约 / 中立，entities.side SideNameMapper）。"""
         if unit_idx < 0 or unit_idx >= self.armor_side.shape[0]:
             return "未知"
-        return _SIDE_NAME.get(int(self.armor_side[unit_idx]), "中立")
+        return _SIDE_NAMES(int(self.armor_side[unit_idx]))
 
     def speed_at(self, unit_idx: int) -> float:
-        """单位速度 m/s（Phase 5 占位；ArmorPool 暂无 velocity 数组）。"""
-        return 0.0
+        """单位水平速度 m/s。
+
+        Phase 5e：渲染层位置差分估计（MainWindow 每帧喂入 EMA 平滑值）；
+        未估计（armor_speed=None）或越界时回退 0.0。
+        """
+        if (
+            self.armor_speed is None
+            or unit_idx < 0
+            or unit_idx >= self.armor_speed.shape[0]
+        ):
+            return 0.0
+        return float(self.armor_speed[unit_idx])
 
     def _reserve_capacity(
         self,
@@ -299,7 +428,8 @@ class WorldAdapter:
         """级别 0（全局概况）聚合数据（docs §4.4 三级信息详细度）。"""
         active = self.armor_active
         side = self.armor_side
-        combat_mask = active & (side < 2)  # 友军 + 敌军（排除中立）
+        # 统计口径：演示默认玩家=北约(0)，故 side 0/1 计 ally/enemy（绝对 side 的派生视图）
+        combat_mask = active & (side < 2)  # 北约 + 华约（排除中立）
         return {
             "n_ally": int(np.count_nonzero(active & (side == 0))),
             "n_enemy": int(np.count_nonzero(active & (side == 1))),

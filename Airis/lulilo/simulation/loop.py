@@ -52,6 +52,15 @@ class EventBus:
         events, self._events = self._events, []
         return events
 
+    def drain_filter(self, kinds: set[str]) -> list[SimulationEvent]:
+        """定向取事件：只取指定 kind 的事件，其余保留在队列（Phase 8 多消费者）。
+
+        炮兵 AI 订阅 support_request 时用（不吞掉 command 等其他事件）。
+        """
+        matched = [e for e in self._events if e.kind in kinds]
+        self._events = [e for e in self._events if e.kind not in kinds]
+        return matched
+
     def __len__(self) -> int:
         return len(self._events)
 
@@ -77,6 +86,10 @@ class SimulationLoop:
         self.events = EventBus()
         self.sim_paused = False          # 暂停间隙：扩容/烘焙热交换（AGENTS.md 3.1）
         self._hooks: dict[str, Hook] = {}
+        # Phase 6c 步骤⑤（docs/phase6-ai-pipeline.md §六.2）：指令路由回调。
+        # 装配层（scenario ⑩）注入：STRIKE → 炮兵 AI 直连（loop 已先 _drain_commands，
+        # AI 不从本队列读玩家指令）；返回 True 表示已消费（不再发通用 command 事件）。
+        self.command_handler: Callable[[Command], bool] | None = None
         # 多分辨率 Tick 调度（AGENTS.md 3.5 外循环）：name → 分频周期(秒)
         # 未配置的子系统每帧执行（兼容骨架行为）
         self._rate_intervals: dict[str, float] = {}
@@ -113,8 +126,10 @@ class SimulationLoop:
         - combat：子弹 Tick（0.01s，内部再细分抛射物积分）
         """
         self.set_rate("movement", TICK_GROUND)
+        self.set_rate("air_movement", TICK_AIR)     # Phase 7：气动积分 + 飞控（0.1s）
         self.set_rate("detection", TICK_GROUND)
         self.set_rate("ai", TICK_GROUND)          # Phase 6c 编队/单位 AI（docs/phase6-ai-pipeline.md §二.5）
+        self.set_rate("air_ai", TICK_GROUND)      # Phase 7：空中编队/单位 AI（1s 秒级慢决策）
         self.set_rate("combat", TICK_BULLET)
         self.set_rate("logistics", TICK_GROUND)
 
@@ -139,7 +154,18 @@ class SimulationLoop:
     # ------------------------------------------------------------------
 
     def _apply_command(self, cmd: Command) -> None:
-        """执行一条玩家指令（骨架：仅记录事件，正式迭代分派到子系统）。"""
+        """执行一条玩家指令（AGENTS.md 3.7）。
+
+        - command_handler（装配层注入）优先：STRIKE → 炮兵 AI 直连（Phase 6c 步骤⑤）；
+          返回 True 表示已消费，不再发通用 command 事件。
+        - 其余指令仅记录事件（正式迭代分派到子系统）。
+        """
+        if self.command_handler is not None:
+            try:
+                if self.command_handler(cmd):
+                    return
+            except Exception:
+                logger.exception("command_handler 处理指令失败: %s", cmd)
         self.events.emit("command", {"type": cmd.type.name, "target": cmd.target_id})
 
     def _drain_commands(self) -> None:
@@ -171,7 +197,9 @@ class SimulationLoop:
         # 多分辨率：配置了分频周期的子系统按累加器到期执行；否则每帧执行
         # Phase 6c：ai（编队决策 + 单位执行）插在 detection 之后（读接触）、
         # combat 之前（开火即时 spawn，弹丸本 tick 在 combat 推进）
-        for name in ("movement", "detection", "ai", "combat", "logistics"):
+        # Phase 7：air_movement（飞→探测）在 detection 之前；air_ai（决策→开火）
+        # 在 combat 之前——保证「飞→探测→AI→开火→弹丸推进」因果序（docs §1.2）
+        for name in ("movement", "air_movement", "detection", "ai", "air_ai", "combat", "logistics"):
             hook = self._hooks.get(name)
             if hook is None:
                 continue

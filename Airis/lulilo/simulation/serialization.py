@@ -26,6 +26,8 @@ import numpy as np
 
 from Airis.lulilo.core.logging import get_logger
 from Airis.lulilo.entities.pools import (
+    AirFormationPool,
+    AircraftPool,
     ArmorPool,
     BoxPool,
     EmitterPool,
@@ -35,6 +37,7 @@ from Airis.lulilo.entities.pools import (
 )
 from Airis.lulilo.logistics.ammo import AmmoState, SupplyRequest
 from Airis.lulilo.logistics.fuel import FuelState
+from Airis.lulilo.entities.twin import TWIN_FIELDS, TwinPool
 from Airis.lulilo.simulation.state import SimulationState
 
 logger = get_logger(__name__)
@@ -91,7 +94,7 @@ def _pack_pool_arrays(arrays: dict[str, np.ndarray]) -> dict:
 
 # Phase 6c AI 字段（docs/phase6-ai-design.md §1.1；旧存档缺失 → 保持构造默认）
 _ARMOR_AI_FIELDS = (
-    "team",
+    "side",
     "role",
     "order",
     "target_idx",
@@ -116,6 +119,9 @@ def _restore_armor(data: dict) -> ArmorPool:
     for name in _ARMOR_AI_FIELDS:
         if name in data:
             setattr(pool, name, decode_ndarray(data[name]))
+    # 旧存档兼容（2026-08-15）：Phase 6c 前的相对阵营字段 team → 新 side（绝对阵营）
+    if "team" in data and "side" not in data:
+        pool.side = decode_ndarray(data["team"]).astype(np.uint8)
     _rebuild_free_stack(pool, pool.active)
     return pool
 
@@ -170,6 +176,8 @@ _PROJECTILE_GUIDANCE_FIELDS = (
     "guid_search_fov_cos",
     "guid_track_fov_cos",
     "guid_filter_quality",
+    "guid_target_vel",  # Phase 7：AAM 目标速度（PN 前置量）
+    "guid_target_kind",  # Phase 7：0=地面 1=空中（seeker 目标源分派）
 )
 
 
@@ -178,10 +186,16 @@ def _restore_projectiles(data: dict) -> ProjectilePool:
     pool = ProjectilePool(capacity=cap)
     for name in ("pos", "vel", "radius", "dmg", "kind", "active", "owner", "weapon", "ammo", "age"):
         setattr(pool, name, decode_ndarray(data[name]))
+    # Phase 7：owner_kind（射手空间：0=装甲 1=飞机；旧存档缺失 → 构造默认 0）
+    if "owner_kind" in data:
+        pool.owner_kind = decode_ndarray(data["owner_kind"])
     # Phase 6b：制导字段（旧存档缺失 → 保持构造默认）
     for name in _PROJECTILE_GUIDANCE_FIELDS:
         if name in data:
             setattr(pool, name, decode_ndarray(data[name]))
+    # Phase 6c 步骤⑤：间瞄弹丸标记（旧存档缺失 → 保持构造默认 False）
+    if "indirect" in data:
+        pool.indirect = decode_ndarray(data["indirect"])
     _rebuild_free_stack(pool, pool.active)
     return pool
 
@@ -208,9 +222,78 @@ def _restore_emitters(data: dict) -> EmitterPool:
     return pool
 
 
+# Phase 7 空中部队字段（docs/phase7-air-pipeline.md §十二；旧存档缺失 → 保持构造默认）
+_AIRCRAFT_FIELDS = (
+    "pos",
+    "vel",
+    "heading",
+    "active",
+    "pitch",
+    "bank",
+    "throttle",
+    "phi_cmd",
+    "gamma_cmd",
+    "state",
+    "side",
+    "role",
+    "order",
+    "target_idx",
+    "target_kind",
+    "formation_id",
+    "comm",
+    "contact_age",
+    "wp",
+    "wp_count",
+    "wp_idx",
+    "fuel",
+    "fuel_burn",
+    "bingo",
+    "aam_left",
+    "agm_left",
+    "cruise_alt",
+    "cruise_spd",
+    "rwr_state",
+    "chaff_left",
+    "flare_left",
+    "health",
+    "dmg_factor",
+    "rcs",
+    "ecm",
+)
+
+
+def _restore_aircraft(data: dict) -> AircraftPool:
+    cap = data["capacity"]
+    pool = AircraftPool(capacity=cap)
+    for name in _AIRCRAFT_FIELDS:
+        if name in data:
+            setattr(pool, name, decode_ndarray(data[name]))
+    _rebuild_free_stack(pool, pool.active)
+    return pool
+
+
+def _restore_air_formations(data: dict) -> AirFormationPool:
+    cap = data["capacity"]
+    pool = AirFormationPool(capacity=cap)
+    for name in ("active", "side", "intent", "order", "target_zone", "comm", "member_count", "leader_idx"):
+        if name in data:
+            setattr(pool, name, decode_ndarray(data[name]))
+    _rebuild_free_stack(pool, pool.active)
+    return pool
+
+
 def _rebuild_free_stack(pool: object, active: np.ndarray) -> None:
     """由 active 掩码重建 free_stack（未占用索引），避免 spawn 复用活跃索引。"""
     pool._free_stack = [int(i) for i in range(active.shape[0]) if not active[i]]
+
+
+def _restore_twin(data: dict) -> TwinPool:
+    cap = data["capacity"]
+    pool = TwinPool(capacity=cap)
+    for name in TWIN_FIELDS:
+        if name in data:
+            setattr(pool, name, decode_ndarray(data[name]))
+    return pool
 
 
 def _restore_ammo(data: dict) -> AmmoState:
@@ -244,12 +327,16 @@ def serialize_battlefield(
     ammo_requests: list[SupplyRequest] | None = None,
     fuel_requests: list[SupplyRequest] | None = None,
     emitters: EmitterPool | None = None,
+    aircraft: AircraftPool | None = None,
+    air_formations: AirFormationPool | None = None,
+    twin: Any | None = None,   # Phase 8 认知孪生池（缺省从 state 读取）
 ) -> bytes:
     """把战场全部可序列化状态打包为 msgpack bytes。
 
     Args:
         state: SimulationState（取 sim_time / tick_count）。
-        armor / boxes / projectiles / emitters: 各对象池（缺省从 state 读取）。
+        armor / boxes / projectiles / emitters / aircraft / air_formations / twin:
+            各对象池（缺省从 state 读取）。
         ammo / fuel: 后勤状态（缺省从 state 读取）。
         ammo_requests / fuel_requests: 挂起补给请求（缺省为空）。
 
@@ -264,6 +351,13 @@ def serialize_battlefield(
     emitters = emitters or (
         state.emitter_pool if state.emitter_pool is not None else None
     )
+    aircraft = aircraft or (
+        state.aircraft_pool if state.aircraft_pool is not None else None
+    )
+    air_formations = air_formations or (
+        state.air_formation_pool if state.air_formation_pool is not None else None
+    )
+    twin = twin or (state.twin_pool if state.twin_pool is not None else None)
     ammo = ammo or (state.ammo.state if state.ammo is not None else None)
     fuel = fuel or (state.fuel.state if state.fuel is not None else None)
 
@@ -290,7 +384,7 @@ def serialize_battlefield(
                     "rcs": armor.rcs,
                     "ecm": armor.ecm,
                     # Phase 6c：AI 字段（docs/phase6-ai-design.md §1.1）
-                    "team": armor.team,
+                    "side": armor.side,
                     "role": armor.role,
                     "order": armor.order,
                     "target_idx": armor.target_idx,
@@ -329,6 +423,7 @@ def serialize_battlefield(
                     "kind": projectiles.kind,
                     "active": projectiles.active,
                     "owner": projectiles.owner,
+                    "owner_kind": projectiles.owner_kind,   # Phase 7：射手空间
                     "weapon": projectiles.weapon,
                     "ammo": projectiles.ammo,
                     "age": projectiles.age,
@@ -344,6 +439,8 @@ def serialize_battlefield(
                     "guid_search_fov_cos": projectiles.guid_search_fov_cos,
                     "guid_track_fov_cos": projectiles.guid_track_fov_cos,
                     "guid_filter_quality": projectiles.guid_filter_quality,
+                    "guid_target_vel": projectiles.guid_target_vel,
+                    "indirect": projectiles.indirect,
                 }
             ),
         }
@@ -364,6 +461,32 @@ def serialize_battlefield(
                     "normal": emitters.normal,
                 }
             ),
+        }
+    if aircraft is not None:
+        payload["aircraft"] = {
+            "capacity": aircraft.capacity,
+            **_pack_pool_arrays({name: getattr(aircraft, name) for name in _AIRCRAFT_FIELDS}),
+        }
+    if air_formations is not None:
+        payload["air_formations"] = {
+            "capacity": air_formations.capacity,
+            **_pack_pool_arrays(
+                {
+                    "active": air_formations.active,
+                    "side": air_formations.side,
+                    "intent": air_formations.intent,
+                    "order": air_formations.order,
+                    "target_zone": air_formations.target_zone,
+                    "comm": air_formations.comm,
+                    "member_count": air_formations.member_count,
+                    "leader_idx": air_formations.leader_idx,
+                }
+            ),
+        }
+    if twin is not None:
+        payload["twin"] = {
+            "capacity": twin.capacity,
+            **_pack_pool_arrays({name: getattr(twin, name) for name in TWIN_FIELDS}),
         }
     if ammo is not None:
         payload["ammo"] = {
@@ -396,6 +519,9 @@ class BattlefieldSave:
     boxes: BoxPool | None = None
     projectiles: ProjectilePool | None = None
     emitters: EmitterPool | None = None  # Phase 6b
+    aircraft: AircraftPool | None = None  # Phase 7
+    air_formations: AirFormationPool | None = None  # Phase 7
+    twin: TwinPool | None = None  # Phase 8 认知孪生
     ammo: AmmoState | None = None
     fuel: FuelState | None = None
     ammo_requests: list[SupplyRequest] = field(default_factory=list)
@@ -408,6 +534,9 @@ class BattlefieldSave:
         st.box_pool = self.boxes
         st.projectile_pool = self.projectiles
         st.emitter_pool = self.emitters
+        st.aircraft_pool = self.aircraft
+        st.air_formation_pool = self.air_formations
+        st.twin_pool = self.twin  # Phase 8
         st.ammo = self.ammo
         st.fuel = self.fuel
         return st
@@ -443,6 +572,12 @@ def deserialize_battlefield(data: bytes) -> BattlefieldSave:
         save.projectiles = _restore_projectiles(payload["projectiles"])
     if "emitters" in payload:
         save.emitters = _restore_emitters(payload["emitters"])
+    if "aircraft" in payload:
+        save.aircraft = _restore_aircraft(payload["aircraft"])
+    if "air_formations" in payload:
+        save.air_formations = _restore_air_formations(payload["air_formations"])
+    if "twin" in payload:
+        save.twin = _restore_twin(payload["twin"])
     if "ammo" in payload:
         save.ammo = _restore_ammo(payload["ammo"])
     if "fuel" in payload:
@@ -463,6 +598,8 @@ def _summarize(save: BattlefieldSave) -> str:
         parts.append(f"装甲 {int(np.sum(save.armor.active))}")
     if save.projectiles is not None:
         parts.append(f"弹丸 {int(np.sum(save.projectiles.active))}")
+    if save.aircraft is not None:
+        parts.append(f"飞机 {int(np.sum(save.aircraft.active))}")
     return ", ".join(parts) if parts else "空"
 
 

@@ -38,6 +38,9 @@ class SimulationState:
     emitter_pool: Any = None  # Phase 6b 电磁辐射源池（可选装配）
     formation_pool: Any = None  # Phase 6c 编队 AI 池（可选装配，docs/phase6-ai-design.md §1.2）
     damage_pool: Any = None  # Phase 6c 伤害提交池（可选装配，docs/phase6-ai-pipeline.md §七）
+    aircraft_pool: Any = None  # Phase 7 空中单位池（可选装配，docs/phase7-air-design.md §1.2）
+    air_formation_pool: Any = None  # Phase 7 空中编队池（可选装配，docs/phase7-air-design.md §五）
+    twin_pool: Any = None  # Phase 8 认知孪生池（可选装配，docs/phase8-datalink-design.md §一）
 
     ammo: Any = None
     fuel: Any = None
@@ -56,6 +59,9 @@ class SimulationState:
                 "emitter": self.emitter_pool,
                 "formation": self.formation_pool,
                 "damage": self.damage_pool,
+                "aircraft": self.aircraft_pool,
+                "air_formation": self.air_formation_pool,
+                "twin": self.twin_pool,  # Phase 8 认知孪生
             },
             logistics={
                 "ammo": self.ammo,

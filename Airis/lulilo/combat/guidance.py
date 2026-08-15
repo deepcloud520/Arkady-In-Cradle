@@ -243,6 +243,23 @@ def control_sfm_ballistic(
     out[0] = out[1] = out[2] = 0.0
 
 
+@njit(cache=True)
+def control_glide_bomb(
+    pos, vel, tpos, tvel, age, stage, override, nav_gain, dt, out,
+) -> None:
+    """滑翔炸弹（Phase 7，docs/phase7-air-pipeline.md §8.1）。
+
+    无推力（只读重力转向）：BALLISTIC → 不制导（自由落体）；TRACK/MEMORY/TERMINAL
+    → 比例导引转向（无轴向推力项——与 control_boost_coast_pn 的唯一区别）。
+    投放后先自由落体（BALLISTIC），激光指示/末制导进入后转 PN 滑翔修正。
+    """
+    if stage == _STAGE_BALLISTIC or stage == _STAGE_SCAN:
+        out[0] = out[1] = out[2] = 0.0
+        return
+    guidance_proportional_nav(pos, vel, tpos, tvel, nav_gain, dt, out)
+    # 无推力项（重力由内核统一施加）
+
+
 # ---------------------------------------------------------------------------
 # 控制律注册表（law_id → @njit 控制回调；插入序即索引序，读档确定性）
 # ---------------------------------------------------------------------------
@@ -300,4 +317,5 @@ class MissileControlRegistry:
         reg.register("dual_pulse_pn", control_dual_pulse_pn)
         reg.register("boost_coast_pp", control_boost_coast_pp)
         reg.register("sfm_ballistic", control_sfm_ballistic)
+        reg.register("glide_bomb", control_glide_bomb)  # Phase 7（末尾追加，读档索引稳定）
         return reg

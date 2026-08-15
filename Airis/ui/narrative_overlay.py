@@ -106,6 +106,12 @@ class NarrativeOverlay(QWidget):
                 w.deleteLater()
 
     def _set_idle(self) -> None:
+        """无活跃对话时的占位显示。
+
+        Phase 5e：**不**清空对话历史——对话结束后 / 切换 Tab 期间历史保留，
+        供玩家回顾（「对话历史跨 Tab 保留」）；新对话激活时 update_state
+        会用新对话的历史整体替换。
+        """
         self._dialogue_id = None
         self._title.setText("📻 前线通讯")
         self._body.setText("待命中...")
@@ -113,4 +119,3 @@ class NarrativeOverlay(QWidget):
         idle = QLabel("（当前无活跃对话）")
         idle.setStyleSheet("color: #66666e; font-size: 12px;")
         self._options_layout.addWidget(idle)
-        self._history.setText("")

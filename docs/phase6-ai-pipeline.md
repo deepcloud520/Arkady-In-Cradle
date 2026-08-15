@@ -14,9 +14,13 @@
 > FormationAIPool + 序列化 + WorldAdapter）+ **步骤 ② 完成**（编队 AI 指挥链 +
 > 单位 AI 执行 + 调度链插 `ai`，`simulation/ai.py` + `tests/test_phase6_ai.py` 16 用例）+
 > **步骤 ③ 完成**（爆炸/毁伤提交池 `combat/damage_submission.py` + 弹药激活
-> HE_FRAG/PELE/APCR/SAPHEI，`tests/test_damage_submission.py` 14 用例）。
-> 全量 **402 测试全绿**（388 基线 + 14 新增）。**步骤 ④（攻顶 ATGM）与 ⑧（巡飞弹/CAS）
-> 延后**（用户拍板不紧急，2026-08-14）；⑤⑥⑦⑨⑩ 未实施。
+> HE_FRAG/PELE/APCR/SAPHEI，`tests/test_damage_submission.py` 14 用例）+
+> **步骤 ⑤ 完成**（炮兵编队 AI + 曲射火控 §六：`FiringControl.fire_indirect` +
+> `solve_ballistic` 弹道解算 + 落地引爆 `_check_indirect_impact` + `ArtilleryAI`
+> （友军/玩家 STRIKE、优先级、comm 门控）+ loop `command_handler` 指令路由 +
+> 内置 M109 155mm 榴弹炮/HE-FRAG，`tests/test_phase6_artillery.py` 19 用例）。
+> 全量 **421 测试全绿**（402 基线 + 19 新增）。**步骤 ④（攻顶 ATGM）与 ⑧（巡飞弹/CAS）
+> 延后**（用户拍板不紧急，2026-08-14）；⑥⑦⑨⑩ 未实施。
 > 前置：Phase 6b（制导 + 电子战闭环 + 末敏弹 + 激光制导炸弹）已全部完成 ✅
 > （`phase6-guidance-pipeline.md` 步骤 1~9，全量 363 测试全绿）。
 > 本文复用 6b 的 `EmitterPool` / `FiringControl` / `MissileControlRegistry` / `detection` 层，
@@ -113,7 +117,7 @@ flowchart TD
 
 ```python
 # ---- Phase 6c AI 字段（docs/phase6-ai-design.md §1.1）----
-self.team         = np.zeros(self.capacity, dtype=np.int8)    # 阵营：0=友 1=敌 2=中立
+self.side         = np.zeros(self.capacity, dtype=np.uint8)    # 绝对阵营（Side：0=北约 1=华约 2=中立）
 self.role         = np.zeros(self.capacity, dtype=np.int8)    # 角色：0坦克 1炮兵 2侦察 3防空 4攻顶ATGM发射器 5预留(空中,Phase7)
 self.order        = np.zeros(self.capacity, dtype=np.int8)    # 编队下达的执行指令（§四.1，非单位独立意图）
 self.target_idx   = np.full(self.capacity, -1, dtype=np.int32) # 编队分配的目标装甲索引（-1 无）
@@ -126,9 +130,9 @@ self.formation_id = np.full(self.capacity, -1, dtype=np.int32)    # 所属编队
 `spawn` 追加参数（带默认值，旧测试构造不变）：
 
 ```python
-def spawn(self, x, y, z, *, team=0, role=0, formation_id=-1, ...):
+def spawn(self, x, y, z, *, side=Side.NATO, role=0, formation_id=-1, ...):
     ...
-    self.team[idx] = int(team)
+    self.side[idx] = int(side)
     self.role[idx] = int(role)
     self.order[idx] = 0
     self.target_idx[idx] = -1
@@ -146,9 +150,10 @@ def spawn(self, x, y, z, *, team=0, role=0, formation_id=-1, ...):
 > `xxx[old_cap:] = 默认` 补填（`FormationAIPool` 的 `comm=1.0` 同样补填；
 > `ProjectilePool` 的 guid 字段有同款遗留，未动）。
 
-> `role` / `team` 此前在渲染层以动态属性 `side` 演示（dev-progress 2026-08-13），
-> 本阶段**正式下沉为 SoA 字段**；`Airis/render/adapter.py` 的 `WorldAdapter` 改读 `armor.team`
-> （`getattr` 防御保留）。
+> `role` / `side` 此前在渲染层以动态属性 `side` 演示（dev-progress 2026-08-13），
+> 本阶段**正式下沉为 SoA 字段**；`Airis/render/adapter.py` 的 `WorldAdapter` 改读 `armor.side`
+> （`getattr` 防御保留）。2026-08-15 改名：`team`（相对友/敌/中立）→ `side`（绝对阵营），
+> 敌友中立由 `entities/side.py` 派生。
 
 ### 2.2 新池 `FormationAIPool`（`entities/pools.py`）
 
@@ -674,6 +679,33 @@ def control_loiter_attack(pos, vel, age, target_pos, target_vel, nav_gain, dt, o
 - Phase 6c **不实现空中单位**：CAS 作为 `STRIKE` 指令的一种 `target_kind` 预留，
   实际投弹由 Phase 7 接入（复用 6b `SALSystem` + HE 爆破，经提交池结算）。
 - 本阶段 `_dispatch_support` 的 CAS 分支仅留接口，不落地实体。
+
+> ✅ **实施（2026-08-14，步骤 ⑤）**：
+> - **`combat/engagement.py`**：模块级 `solve_ballistic(v, R, z0, g, elevation_deg)`——
+>   弹道解算（z0 归零二次方程，固定仰角反解初速 / 初速解低伸角，无解返回 None）；
+>   `fire_indirect(shooter, aim_x, aim_y, aim_z=None, *, ammo_id, target_idx, elevation_deg)`——
+>   统计层散布 → 高斯偏移到落点 → 弹道解算 → 抛射物生成（`indirect` 标记 +
+>   `guid_stage=BALLISTIC`，**制导状态机对 `indirect` 弹丸整体跳过**，防末敏弹
+>   `z ≤ scan_altitude` 误转 SCAN 悬停）+ 弹药消耗/冷却同直射；`_check_indirect_impact`
+>   （z ≤ 地面高 → `_detonate_indirect` 提交 SPHERE + FRAG_CONE）；`_ground_z`
+>   （地形地面高，无地形兜底落点参考高度）；`_recycle_stale` 对 `indirect` 弹丸
+>   豁免 WORLD_BOUND 与 20s 上限（`INDIRECT_MAX_AGE=90s`，45° 高抛 T=√(2R/g)≤55s）。
+> - **`entities/pools.py`**：`ProjectilePool.indirect` bool 数组（init/spawn/destroy/
+>   destroy_batch/_expand 同步）；序列化/读档兼容（`if "indirect" in data`）。
+> - **`simulation/ai.py`**：`UnitRole`（ARTILLERY=1）+ `ArtilleryMission` +
+>   `ArtilleryAI`（`handle_command` 玩家 STRIKE 优先级最高 / `request_strike` 友军请求 /
+>   `tick` 按优先级分派炮位、编队 comm 门控、齐射数）；`FormationAI` 增 `artillery`
+>   引用（tick 内驱动）且单位执行跳过 `role=ARTILLERY` 成员（不直射/不机动）。
+> - **`simulation/loop.py`**：`command_handler` 回调（装配层注入，STRIKE 直达炮兵 AI，
+>   返回 True 不再发通用 command 事件）。
+> - **`combat/weapons.py`**：内置 `m109_155mm`（HOWITZER，max_range=15000，
+>   受 `INDIRECT_MAX_AGE` 约束）+ `m107_155mm_he_frag`（HE_FRAG，blast 25m/150，
+>   frag 120×25）。
+> - 测试 `tests/test_phase6_artillery.py` **19 用例全绿**（弹道解算/开火/落点/
+>   落地爆/直击爆/编队 AI 优先级与 comm 门控/齐射/loop 路由集成）。
+> - **实施差异**：弹道用「初速解低伸角」（默认）或固定 `elevation_deg`（45°）；
+>   浅弹道会在低空掠过目标（物理正确，落点 15~25m 内即视为擦碰直击）；
+>   落点检测在子步粒度，过冲 ≤ 一个子步水平位移（vx·dt≈8m），散布 σ≈2.3m。
 
 ---
 

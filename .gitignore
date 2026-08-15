@@ -12,6 +12,7 @@ moderngl/
 Reference/
 # 测试输出产物（AGENTS.md 4.5：统一输出到 tests/output/，运行前清空）
 tests/output/
+archive_dev_progress.py
 
 # 日志文件（AGENTS.md：模块级 logger，日志产物不上传）
 *.log

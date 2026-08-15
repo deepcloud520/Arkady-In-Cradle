@@ -1,4 +1,4 @@
-"""Phase 6b 制导性能基准（docs/phase6-guidance-pipeline.md §八 性能预算）。
+﻿"""Phase 6b 制导性能基准（docs/phase6-guidance-pipeline.md §八 性能预算）。
 
     [1] 制导积分内核（64 枚导弹 TRACK）：预算 < 1ms/帧
     [2] 完整开火链一帧（2048 装甲 + 64 枚导弹 + 阶段切换 + 扫描 + 碰撞）：
@@ -68,7 +68,7 @@ def benchmark_guided_integrate() -> float:
 
     integrate_guided_projectile_movement(
         p.pos, p.vel, p.active, p.age,
-        p.guid_target_pos, p.guid_memory_pos, p.guid_stage,
+        p.guid_target_pos, p.guid_target_vel, p.guid_target_kind, p.guid_memory_pos, p.guid_stage,
         p.guid_nav_gain, p.guid_override,
         p.guid_search_fov_cos, p.guid_track_fov_cos,
         GUIDED_MAX_ACCEL, 0.01, 9.81, fn,
@@ -79,7 +79,7 @@ def benchmark_guided_integrate() -> float:
     for _ in range(N_RUN):
         integrate_guided_projectile_movement(
             p.pos, p.vel, p.active, p.age,
-            p.guid_target_pos, p.guid_memory_pos, p.guid_stage,
+            p.guid_target_pos, p.guid_target_vel, p.guid_target_kind, p.guid_memory_pos, p.guid_stage,
             p.guid_nav_gain, p.guid_override,
             p.guid_search_fov_cos, p.guid_track_fov_cos,
             GUIDED_MAX_ACCEL, 0.01, 9.81, fn,
@@ -160,3 +160,4 @@ def benchmark_full_step() -> float:
 if __name__ == "__main__":
     benchmark_guided_integrate()
     benchmark_full_step()
+

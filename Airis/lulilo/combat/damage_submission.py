@@ -136,6 +136,57 @@ def resolve_area_damage(
                 box_hp[hj] = hp if hp > 0.0 else 0.0
 
 
+@njit(cache=True)
+def resolve_aircraft_area_damage(
+    kind: np.ndarray,          # (E,) int8 伤害模型（SPHERE / FRAG_CONE）
+    center: np.ndarray,        # (E, 3) float32 事件中心
+    radius: np.ndarray,        # (E,) float32 球半径 / 锥射程
+    strength: np.ndarray,      # (E,) float32 事件强度
+    direction: np.ndarray,     # (E, 3) float32 锥方向
+    cone_angle: np.ndarray,    # (E,) float32 锥半角
+    active: np.ndarray,        # (E,) bool_ 事件活跃掩码
+    air_pos: np.ndarray,       # (N, 3) float32 飞机位置
+    air_health: np.ndarray,    # (N,) float32 飞机血量（原地修改，下限 0）
+    air_state: np.ndarray,     # (N,) int8 飞机状态（PARKED=6 不结算）
+    air_active: np.ndarray,    # (N,) bool_ 飞机存活掩码
+) -> None:
+    """飞机爆轰结算（Phase 7，docs/phase7-air-pipeline.md §7.4 ②）。
+
+    与 `resolve_area_damage` 的 SPHERE 分支同公式（health -= strength·(1−d/radius)），
+    但扣 `air_health` 而非 box_hp。坠毁/AAM 近炸/炸弹对飞机的区域毁伤走本内核，
+    `resolve_area_damage` 保持零侵入（它只吃装甲数组）。
+    """
+    e = active.shape[0]
+    n = air_pos.shape[0]
+    for i in range(e):
+        if not active[i]:
+            continue
+        k = kind[i]
+        if k != _DK_SPHERE:
+            continue
+        cx = center[i, 0]
+        cy = center[i, 1]
+        cz = center[i, 2]
+        r = radius[i]
+        base = strength[i]
+        r2 = r * r
+        for j in range(n):
+            if not air_active[j]:
+                continue
+            if int(air_state[j]) == 6:   # PARKED 不结算
+                continue
+            dx = air_pos[j, 0] - cx
+            dy = air_pos[j, 1] - cy
+            dz = air_pos[j, 2] - cz
+            d2 = dx * dx + dy * dy + dz * dz
+            if d2 > r2:
+                continue
+            d = np.sqrt(d2)
+            factor = 1.0 - d / r
+            hp = air_health[j] - base * factor
+            air_health[j] = hp if hp > 0.0 else 0.0
+
+
 class DamageSubmissionPool:
     """伤害提交池：弹药把「伤害事件」提交进池，Tick 末统一批量结算（docs §七.2）。
 

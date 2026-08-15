@@ -42,3 +42,8 @@ default = true
 [tool.pytest.ini_options]
 # 只收集项目自己的 tests/，避免误收集 vendor 的 moderngl/tests（第三方库自带测试）
 testpaths = ["tests"]
+# 不自动删除旧 tmp_path 临时目录（2026-08-15：由开发者手动清理）
+tmp_path_retention_policy = "none"
+# 测试产物目录（AGENTS.md §4.5：所有测试产物统一写 tests/output/）不参与收集——
+# 残留的 pytest-tmp 临时目录可能被锁/无权限，收集时报 PermissionError
+norecursedirs = ["tests/output"]

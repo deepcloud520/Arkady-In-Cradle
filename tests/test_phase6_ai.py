@@ -45,7 +45,7 @@ def _spawn_tank(
     x: float,
     y: float,
     *,
-    team: int = 0,
+    side: int = 0,
     formation_id: int = -1,
     health: float = 100.0,
     create_hull: bool = True,
@@ -53,7 +53,7 @@ def _spawn_tank(
     idx = armor.spawn(
         x, y, 0.0,
         half_x=1.5, half_y=3.0, half_z=1.0,
-        team=team, formation_id=formation_id,
+        side=side, formation_id=formation_id,
     )
     if create_hull:
         bidx = _AI_BOXES.spawn(idx, int(PartType.HULL), 1.5, 3.0, 1.0, 0.0, 0.0, 0.0)
@@ -71,12 +71,12 @@ def _spawn_combat_tank(
     x: float,
     y: float,
     *,
-    team: int = 0,
+    side: int = 0,
     formation_id: int = -1,
     health: float = 100.0,
 ) -> int:
     idx = _spawn_tank(
-        armor, x, y, team=team, formation_id=formation_id,
+        armor, x, y, side=side, formation_id=formation_id,
         health=health, create_hull=False,
     )
     for part, hx, hy, hz, lx, ly, lz in _SIMPLE_PARTS:
@@ -117,8 +117,9 @@ class TestScoreTargets:
         speed = np.zeros(2, dtype=np.float32)
         wp = np.zeros(2, dtype=np.float32)
         health = np.ones(2, dtype=np.float32)
+        conf = np.ones(2, dtype=np.float32)   # Phase 8：confidence 折扣（全知=1.0）
         out = np.zeros(2, dtype=np.float32)
-        score_targets(dist, speed, wp, health, 1.0, 0.0, 0.0, 0.0, 2000.0, out)
+        score_targets(dist, speed, wp, health, conf, 1.0, 0.0, 0.0, 0.0, 2000.0, out)
         assert out[0] > out[1]
 
     def test_low_health_priority(self) -> None:
@@ -127,8 +128,9 @@ class TestScoreTargets:
         speed = np.zeros(2, dtype=np.float32)
         wp = np.zeros(2, dtype=np.float32)
         health = np.array([1.0, 0.1], dtype=np.float32)
+        conf = np.ones(2, dtype=np.float32)
         out = np.zeros(2, dtype=np.float32)
-        score_targets(dist, speed, wp, health, 0.0, 0.0, 0.0, 1.0, 2000.0, out)
+        score_targets(dist, speed, wp, health, conf, 0.0, 0.0, 0.0, 1.0, 2000.0, out)
         assert out[1] > out[0]
 
 
@@ -147,11 +149,11 @@ class TestFormationIntentFSM:
     def test_maneuver_to_advance_on_advantage(self) -> None:
         """遭遇敌且兵力优势 → ADVANCE。"""
         armor, formations, ai = self._make()
-        fidx = formations.spawn(team=0, role=0, target_zone=(100.0, 100.0, 0.0))
+        fidx = formations.spawn(side=0, role=0, target_zone=(100.0, 100.0, 0.0))
         for i in range(3):  # 友 3
-            _spawn_tank(armor, float(i * 10), 0.0, team=0, formation_id=fidx)
-        _spawn_tank(armor, 500.0, 0.0, team=1)  # 敌 2
-        _spawn_tank(armor, 510.0, 0.0, team=1)
+            _spawn_tank(armor, float(i * 10), 0.0, side=0, formation_id=fidx)
+        _spawn_tank(armor, 500.0, 0.0, side=1)  # 敌 2
+        _spawn_tank(armor, 510.0, 0.0, side=1)
         loop = _make_loop(armor, formations)
         ai.tick(loop, 1.0)
         assert int(formations.intent[fidx]) == int(FormationIntent.ADVANCE)
@@ -159,11 +161,11 @@ class TestFormationIntentFSM:
     def test_maneuver_to_defend_on_disadvantage(self) -> None:
         """遭遇敌且兵力劣势 → DEFEND。"""
         armor, formations, ai = self._make()
-        fidx = formations.spawn(team=0, role=0)
-        _spawn_tank(armor, 0.0, 0.0, team=0, formation_id=fidx)  # 友 2
-        _spawn_tank(armor, 10.0, 0.0, team=0, formation_id=fidx)
+        fidx = formations.spawn(side=0, role=0)
+        _spawn_tank(armor, 0.0, 0.0, side=0, formation_id=fidx)  # 友 2
+        _spawn_tank(armor, 10.0, 0.0, side=0, formation_id=fidx)
         for i in range(3):  # 敌 3
-            _spawn_tank(armor, 500.0 + i * 10, 0.0, team=1)
+            _spawn_tank(armor, 500.0 + i * 10, 0.0, side=1)
         loop = _make_loop(armor, formations)
         ai.tick(loop, 1.0)
         assert int(formations.intent[fidx]) == int(FormationIntent.DEFEND)
@@ -171,9 +173,9 @@ class TestFormationIntentFSM:
     def test_advance_to_retreat_on_loss(self) -> None:
         """进攻中损失超阈值 → RETREAT。"""
         armor, formations, ai = self._make()
-        fidx = formations.spawn(team=0, role=0)
+        fidx = formations.spawn(side=0, role=0)
         formations.intent[fidx] = int(FormationIntent.ADVANCE)
-        _spawn_tank(armor, 0.0, 0.0, team=0, formation_id=fidx, health=30.0)
+        _spawn_tank(armor, 0.0, 0.0, side=0, formation_id=fidx, health=30.0)
         loop = _make_loop(armor, formations)
         ai.tick(loop, 1.0)
         assert int(formations.intent[fidx]) == int(FormationIntent.RETREAT)
@@ -181,7 +183,7 @@ class TestFormationIntentFSM:
     def test_hold_command_overrides(self) -> None:
         """编队级 HOLD 命令 → 意图 HOLD。"""
         armor, formations, ai = self._make()
-        fidx = formations.spawn(team=0, role=0)
+        fidx = formations.spawn(side=0, role=0)
         formations.intent[fidx] = int(FormationIntent.ADVANCE)
         formations.order[fidx] = int(UnitOrder.HOLD)
         loop = _make_loop(armor, formations)
@@ -200,12 +202,12 @@ class TestCommandChain:
         armor = ArmorPool(capacity=32)
         formations = FormationAIPool(capacity=8)
         ai = _make_ai(armor, formations)
-        fidx = formations.spawn(team=0, role=0)
+        fidx = formations.spawn(side=0, role=0)
         formations.intent[fidx] = int(FormationIntent.ADVANCE)
-        m1 = _spawn_tank(armor, 0.0, 0.0, team=0, formation_id=fidx)
-        m2 = _spawn_tank(armor, 10.0, 0.0, team=0, formation_id=fidx)
-        e1 = _spawn_tank(armor, 500.0, 0.0, team=1)
-        e2 = _spawn_tank(armor, 510.0, 0.0, team=1)
+        m1 = _spawn_tank(armor, 0.0, 0.0, side=0, formation_id=fidx)
+        m2 = _spawn_tank(armor, 10.0, 0.0, side=0, formation_id=fidx)
+        e1 = _spawn_tank(armor, 500.0, 0.0, side=1)
+        e2 = _spawn_tank(armor, 510.0, 0.0, side=1)
         loop = _make_loop(armor, formations)
         ai.tick(loop, 1.0)
 
@@ -222,10 +224,10 @@ class TestCommandChain:
         armor = ArmorPool(capacity=32)
         formations = FormationAIPool(capacity=8)
         ai = _make_ai(armor, formations)
-        fidx = formations.spawn(team=0, role=0)
+        fidx = formations.spawn(side=0, role=0)
         formations.intent[fidx] = int(FormationIntent.ADVANCE)
-        members = [_spawn_tank(armor, float(i * 10), 0.0, team=0, formation_id=fidx) for i in range(4)]
-        _spawn_tank(armor, 500.0, 0.0, team=1)  # 敌 1
+        members = [_spawn_tank(armor, float(i * 10), 0.0, side=0, formation_id=fidx) for i in range(4)]
+        _spawn_tank(armor, 500.0, 0.0, side=1)  # 敌 1
         loop = _make_loop(armor, formations)
         ai.tick(loop, 1.0)
         assigned = sum(1 for m in members if int(armor.target_idx[m]) >= 0)
@@ -236,11 +238,11 @@ class TestCommandChain:
         armor = ArmorPool(capacity=32)
         formations = FormationAIPool(capacity=8)
         ai = _make_ai(armor, formations)
-        fidx = formations.spawn(team=0, role=0)
+        fidx = formations.spawn(side=0, role=0)
         formations.intent[fidx] = int(FormationIntent.ADVANCE)
-        healthy = _spawn_tank(armor, 0.0, 0.0, team=0, formation_id=fidx)
-        hurt = _spawn_tank(armor, 10.0, 0.0, team=0, formation_id=fidx, health=40.0)
-        _spawn_tank(armor, 500.0, 0.0, team=1)
+        healthy = _spawn_tank(armor, 0.0, 0.0, side=0, formation_id=fidx)
+        hurt = _spawn_tank(armor, 10.0, 0.0, side=0, formation_id=fidx, health=40.0)
+        _spawn_tank(armor, 500.0, 0.0, side=1)
         loop = _make_loop(armor, formations)
         ai.tick(loop, 1.0)
         assert int(armor.order[hurt]) == int(UnitOrder.DEFEND)
@@ -272,10 +274,10 @@ class TestUnitExecution:
     def test_engage_fires(self) -> None:
         """编队下达进攻 → 成员对分配目标自主开火。"""
         armor, boxes, proj, ammo, fc, formations, ai, events = self._make_combat()
-        fidx = formations.spawn(team=0, role=0)
+        fidx = formations.spawn(side=0, role=0)
         formations.intent[fidx] = int(FormationIntent.ADVANCE)
-        m = _spawn_combat_tank(armor, boxes, fc, ammo, 0.0, 0.0, team=0, formation_id=fidx)
-        e = _spawn_combat_tank(armor, boxes, fc, ammo, 100.0, 0.0, team=1)
+        m = _spawn_combat_tank(armor, boxes, fc, ammo, 0.0, 0.0, side=0, formation_id=fidx)
+        e = _spawn_combat_tank(armor, boxes, fc, ammo, 100.0, 0.0, side=1)
         loop = _make_loop(armor, formations)
         ai.tick(loop, 1.0)
 
@@ -288,10 +290,10 @@ class TestUnitExecution:
     def test_engage_moves_when_out_of_range(self) -> None:
         """目标超射程 → 机动靠近（写 wp）。"""
         armor, boxes, proj, ammo, fc, formations, ai, events = self._make_combat()
-        fidx = formations.spawn(team=0, role=0)
+        fidx = formations.spawn(side=0, role=0)
         formations.intent[fidx] = int(FormationIntent.ADVANCE)
-        m = _spawn_combat_tank(armor, boxes, fc, ammo, 0.0, 0.0, team=0, formation_id=fidx)
-        _spawn_combat_tank(armor, boxes, fc, ammo, 5000.0, 0.0, team=1)  # 超射程
+        m = _spawn_combat_tank(armor, boxes, fc, ammo, 0.0, 0.0, side=0, formation_id=fidx)
+        _spawn_combat_tank(armor, boxes, fc, ammo, 5000.0, 0.0, side=1)  # 超射程
         loop = _make_loop(armor, formations)
         ai.tick(loop, 1.0)
         assert armor.wp_count[m] > 0  # 已下达移动路标
@@ -301,8 +303,8 @@ class TestUnitExecution:
         armor = ArmorPool(capacity=32)
         formations = FormationAIPool(capacity=8)
         ai = _make_ai(armor, formations)
-        fidx = formations.spawn(team=0, role=0, target_zone=(300.0, 400.0, 0.0))
-        m = _spawn_tank(armor, 0.0, 0.0, team=0, formation_id=fidx)
+        fidx = formations.spawn(side=0, role=0, target_zone=(300.0, 400.0, 0.0))
+        m = _spawn_tank(armor, 0.0, 0.0, side=0, formation_id=fidx)
         armor.order[m] = int(UnitOrder.MANEUVER)
         loop = _make_loop(armor, formations)
         ai.tick(loop, 1.0)
@@ -312,10 +314,10 @@ class TestUnitExecution:
     def test_self_preserve_on_low_comm(self) -> None:
         """通信断裂（comm 低）→ 自主自保：对最近威胁还击。"""
         armor, boxes, proj, ammo, fc, formations, ai, events = self._make_combat()
-        fidx = formations.spawn(team=0, role=0)
-        m = _spawn_combat_tank(armor, boxes, fc, ammo, 0.0, 0.0, team=0, formation_id=fidx)
+        fidx = formations.spawn(side=0, role=0)
+        m = _spawn_combat_tank(armor, boxes, fc, ammo, 0.0, 0.0, side=0, formation_id=fidx)
         armor.comm[m] = 0.1  # 低于 COMM_THRESHOLD
-        _spawn_combat_tank(armor, boxes, fc, ammo, 100.0, 0.0, team=1)
+        _spawn_combat_tank(armor, boxes, fc, ammo, 100.0, 0.0, side=1)
         loop = _make_loop(armor, formations)
         ai.tick(loop, 1.0)
         assert proj.active_count >= 1  # 还击开火
@@ -325,10 +327,10 @@ class TestUnitExecution:
         armor = ArmorPool(capacity=32)
         formations = FormationAIPool(capacity=8)
         ai = _make_ai(armor, formations)
-        fidx = formations.spawn(team=0, role=0)
-        m = _spawn_tank(armor, 0.0, 0.0, team=0, formation_id=fidx, health=20.0)
+        fidx = formations.spawn(side=0, role=0)
+        m = _spawn_tank(armor, 0.0, 0.0, side=0, formation_id=fidx, health=20.0)
         armor.comm[m] = 0.1
-        _spawn_tank(armor, 100.0, 0.0, team=1)
+        _spawn_tank(armor, 100.0, 0.0, side=1)
         loop = _make_loop(armor, formations)
         ai.tick(loop, 1.0)
         assert armor.wp_count[m] > 0  # 撤退机动
@@ -345,9 +347,9 @@ class TestLoopIntegration:
         armor = ArmorPool(capacity=32)
         formations = FormationAIPool(capacity=8)
         ai = _make_ai(armor, formations)
-        fidx = formations.spawn(team=0, role=0)
-        _spawn_tank(armor, 0.0, 0.0, team=0, formation_id=fidx)
-        _spawn_tank(armor, 100.0, 0.0, team=1)
+        fidx = formations.spawn(side=0, role=0)
+        _spawn_tank(armor, 0.0, 0.0, side=0, formation_id=fidx)
+        _spawn_tank(armor, 100.0, 0.0, side=1)
 
         loop = _make_loop(armor, formations)
         loop.attach("ai", ai.tick)
@@ -375,9 +377,9 @@ class TestLoopIntegration:
         )
         formations = FormationAIPool(capacity=8)
         ai = _make_ai(armor, formations, events=events, fc=fc)
-        fidx = formations.spawn(team=0, role=0)
-        _spawn_combat_tank(armor, boxes, fc, ammo, 0.0, 0.0, team=0, formation_id=fidx)
-        e = _spawn_combat_tank(armor, boxes, fc, ammo, 100.0, 0.0, team=1)
+        fidx = formations.spawn(side=0, role=0)
+        _spawn_combat_tank(armor, boxes, fc, ammo, 0.0, 0.0, side=0, formation_id=fidx)
+        e = _spawn_combat_tank(armor, boxes, fc, ammo, 100.0, 0.0, side=1)
 
         def combat_hook(loop: SimulationLoop, dt: float) -> None:
             fc.tick(dt)

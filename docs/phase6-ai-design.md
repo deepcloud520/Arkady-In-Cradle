@@ -58,7 +58,7 @@
 
 ```python
 # ---- Phase 6c AI 字段（docs/phase6-ai-design.md §一）----
-self.team        = np.zeros(self.capacity, dtype=np.int8)    # 阵营：0=友 1=敌 2=中立
+self.side        = np.zeros(self.capacity, dtype=np.uint8)    # 绝对阵营（Side：0=北约 1=华约 2=中立）
 self.role        = np.zeros(self.capacity, dtype=np.int8)    # 角色：0=坦克 1=炮兵 2=侦察 3=防空 4=攻顶ATGM发射器 5=预留(空中,Phase7)
 self.order       = np.zeros(self.capacity, dtype=np.int8)    # 编队下达的执行指令（§三.1，非单位独立意图）
 self.target_idx  = np.full(self.capacity, -1, dtype=np.int32) # 编队分配的目标装甲索引（-1 无）
@@ -68,8 +68,11 @@ self.contact_age = np.full(self.capacity, 1e9, dtype=np.float32) # 最近一次�
 self.formation_id = np.full(self.capacity, -1, dtype=np.int32)   # 所属编队 AI 池索引（§1.2，-1 未编队）
 ```
 
-> `role`/`team` 此前在渲染层以动态属性（`side`）演示（dev-progress 2026-08-13），本阶段**正式
-> 下沉为 SoA 字段**，渲染 `WorldAdapter` 改读 `armor.team`。
+> `role`/`side` 此前在渲染层以动态属性（`side`）演示（dev-progress 2026-08-13），本阶段**正式
+> 下沉为 SoA 字段**，渲染 `WorldAdapter` 改读 `armor.side`。
+>
+> 🔥 **2026-08-15 改名**：`team`（相对友/敌/中立）→ `side`（绝对阵营），敌友中立改由
+> `entities/side.py` 的 `hostile()`/`allegiance()` 派生（见该模块 docstring）。
 >
 > **意图 FSM 不再挂在单位上**——单位只持有 `order`（编队下达的执行指令），意图/战术姿态由
 > 编队 AI 决定（§二）。通信断裂时单位按 §三.3 的自主自保行为兜底。

@@ -23,6 +23,9 @@ RCS_APC = 15.0        # 装甲运兵车
 RCS_TRUCK = 10.0      # 卡车
 RCS_HELICOPTER = 5.0  # 直升机
 RCS_PERSON = 1.0      # 人员
+# Phase 7 飞机 RCS（docs/phase7-air-pipeline.md §四.2）
+RCS_FIGHTER = 5.0     # 战斗机
+RCS_BOMBER = 10.0     # 轰炸机/攻击机（大翼展）
 
 # 红外特征（相对值，无量纲）
 IR_TANK_IDLE = 0.3       # 坦克怠速

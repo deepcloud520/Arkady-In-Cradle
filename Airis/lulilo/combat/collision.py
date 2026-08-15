@@ -385,6 +385,55 @@ def detect_projectiles_batch(
 # ---------------------------------------------------------------------------
 
 
+@njit(cache=True, parallel=True)
+def detect_proj_aircraft_batch(
+    proj_pos: np.ndarray,        # (P, 3) float32 弹丸位置（当前帧）
+    proj_vel: np.ndarray,        # (P, 3) float32 弹丸速度（反推上一帧）
+    proj_radius: np.ndarray,     # (P,) float32 弹丸碰撞半径
+    proj_active: np.ndarray,     # (P,) bool_
+    air_pos: np.ndarray,         # (N, 3) float32 飞机机身箱位置（世界坐标，BoxPool sync 后）
+    air_half: np.ndarray,        # (N, 3) float32 机身箱半边长
+    air_active: np.ndarray,      # (N,) bool_
+    dt: float,
+    out_hit: np.ndarray,         # (P,) int32 out：命中飞机索引（-1 未命中）
+    out_t: np.ndarray,           # (P,) float32 out：命中参数 t
+) -> None:
+    """弹丸 vs 飞机机身箱批量碰撞（Phase 7，docs §7.4 ①）。
+
+    复用统一「胶囊体 vs AABB」算法（`segment_aabb_single`）：飞机挂的机身箱
+    是 AABB（BoxPool parent_kind=1，sync 后世界坐标），弹丸轨迹是胶囊。
+    飞机数 ≤128 → 全对全即可（不建空间索引；对比装甲 2048 需哈希）。
+    """
+    p = proj_pos.shape[0]
+    n = air_pos.shape[0]
+    for i in prange(p):  # noqa: F821
+        if not proj_active[i]:
+            continue
+        p0x = proj_pos[i, 0] - proj_vel[i, 0] * dt
+        p0y = proj_pos[i, 1] - proj_vel[i, 1] * dt
+        p0z = proj_pos[i, 2] - proj_vel[i, 2] * dt
+        p1x = proj_pos[i, 0]
+        p1y = proj_pos[i, 1]
+        p1z = proj_pos[i, 2]
+        rad = proj_radius[i]
+        best_t = 1e9
+        best = -1
+        for j in range(n):
+            if not air_active[j]:
+                continue
+            hit, t = segment_aabb_single(
+                p0x, p0y, p0z, p1x, p1y, p1z,
+                air_pos[j, 0], air_pos[j, 1], air_pos[j, 2],
+                air_half[j, 0], air_half[j, 1], air_half[j, 2],
+                rad,
+            )
+            if hit and t < best_t:
+                best_t = t
+                best = j
+        out_hit[i] = best
+        out_t[i] = best_t
+
+
 @dataclass(frozen=True)
 class CollisionHit:
     """一次命中记录（供后续毁伤解析消费）。"""

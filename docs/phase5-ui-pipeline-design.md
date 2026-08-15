@@ -1,12 +1,12 @@
 # Phase 5 UI 管线设计
 
-> 状态：**Phase 5a/5b/5c/5d 已实施**（2026-08-13）；Phase 5b/5c 遗留（HUD 文字/弹道线）待后续
+> 状态：**Phase 5a/5b/5c/5d/5e 全部实施**（5a-5d 2026-08-13；5e 收尾 2026-08-15）
 > 对应 AGENTS.md Phase 5（UI 集成与主题商店）
 > 前置：Phase 0-3（引擎）✅ / Phase 4（叙事层，已实现骨架）✅
 
 ---
 
-## 实施进度（2026-08-13）
+## 实施进度（2026-08-13 / 2026-08-15）
 
 ### Phase 5a 已完成 ✅
 
@@ -39,10 +39,26 @@
 | 主题热切换（default↔constructivism↔anime） | ✅ 5 轮稳定 |
 | 验证 | ✅ 299 passed；smoke_theme_anime 描边开关对照 0.89%；lum_peaks=2 |
 
-### 待办
+### Phase 5e 已完成 ✅（2026-08-15，Phase 5 全部收尾）
 
-- **5b/5c 遗留**：DetailPanel 级别 2 速度占位（ArmorPool 无 velocity）；HUD 文字标签 / 弹道线 / 命中标记（docs §4.3）；对话历史跨 Tab 保留
+| 项 | 状态 |
+|----|------|
+| `Airis/render/hud/text.py` FontAtlas + TextRenderer | ✅ PIL 字体图集（ASCII + 中文部位/阵营名 + ⚠）+ 实例化字符 quad 绘制 |
+| HUD 单位文字标签（单位名，选中/悬浮高亮色） | ✅ GLWidget._render_labels，读 WorldAdapter.unit_name |
+| HUD 损坏 ⚠ 摘要文字 | ✅ `⚠ 引擎 履带`（橙色，读 damaged_parts） |
+| `Airis/render/effects.py` EffectLayer（弹道线/命中标记缓冲） | ✅ 纯逻辑可无头单测：fire→弹道线，hit/ricochet/destroyed→命中标记，墙钟时间老化 + 上限防刷屏 |
+| 弹道线（射手→目标，渐隐） | ✅ HUDOverlay.render_lines 线段实例化渲染 |
+| 命中标记（扩张圆环 + 十字，渐隐） | ✅ HUDOverlay.render_ring（u_mode=1 软边圆环）+ render_lines |
+| DetailPanel 级别 2 真实速度 | ✅ 渲染层位置差分 + EMA（`_estimate_speed`，不动引擎；adapter.armor_speed） |
+| 对话历史跨 Tab / 结束后保留 | ✅ NarrativeOverlay._set_idle 不再清空历史（新对话激活时整体替换） |
+| `Airis/ui/controls.py` ControlMap（键盘→动作） | ✅ 空格暂停 / 回车推进 / 1-9 选选项（→ CommandQueue）/ S 跳过 / Ctrl+1/2/3 主题 / F1 帮助 |
+| MainWindow 手动暂停（与对话暂停独立） | ✅ `_manual_paused` + 事件过滤器（GLWidget.installEventFilter） |
+| 验证 | ✅ 435 passed（新增 tests/test_phase5_effects.py 15 用例） |
+
+### 待办（仅剩 5d 留档项）
+
 - **5d 留档**：深度剪影描边（early-z 失效，需 G-Buffer 方案 B）；HUD 主题化（Phase 8 孪生置信度）
+- **5e 备注**：HUD 弹道线目前用「射手→目标当前世界位置」直线近似（不跟踪弹丸飞行轨迹，避免渲染层读抛射物池）；命中标记位置 = 目标单位位置（非精确命中点）——足够演示级视觉效果
 
 ### 实施中踩坑（已修复，重要）
 
@@ -51,6 +67,9 @@
 3. **主题切换地形变黑（GL context 非 current）**：菜单槽触发时 context 不保证 current，编译 program / 重建 VAO / 写 uniform 静默失败。修复 = `MainWindow._switch_theme` 整个 switch 包进 `gl_widget.makeCurrent()/doneCurrent()`；`_on_theme_switched` 里 GL 操作再包一层（防御）
 4. **glm 矩阵转 numpy 的 to_list 转置陷阱（2026-08-13，HUD 圆重合/飞出根因）**：`glm.mat4.to_list()` 返回 **4 个列向量**（非扁平 16 元素），`np.array(to_list()).reshape(4,4, order='F')` 是 **no-op**（已 (4,4)）→ 矩阵被转置 → clip_w 错乱 500 倍（224.6→115480）→ **所有单位 HUD 圆投影到同一屏幕点（友军/敌军完全重合）+ 特殊角度 NDC 爆炸圆点飞出**。修复 = 改用 `np.frombuffer(mvp.to_bytes(), ...)`（与 GPU uniform 完全一致的 column-major 扁平）。教训：**identity 矩阵转置不变 → 单测测不出，必须加非 identity 相机投影对比测试**（test_project_matches_glm）
 5. **HUD 深度测试剔除（2026-08-13）**：HUD 圆点 NDC z=0（深度 ~0.5），GL_LESS 下近处地形（深度<0.5）把标记剔除 → 低角度观察圆点消失。修复 = `_render_hud` 期间 `ctx.disable(DEPTH_TEST)`（HUD 语义=永远最上层），finally 恢复
+6. **文字图集必须回退（2026-08-15，5e）**：HUD 文字依赖 CJK 字体文件，找不到字体时 `FontAtlas.available=False`，`TextRenderer` 不创建、渲染层自动跳过文字（不崩溃）。测试用 `pytest.skip` 处理无字体环境
+7. **特效位置渲染时刻解析（2026-08-15，5e）**：弹道线/命中标记**不缓存事件发生时的世界坐标**，而是渲染时用 `WorldAdapter.armor_pos` 解析（单位移动后特效跟随，无需事件携带位置）；缺点 = 非精确轨迹/命中点（演示级足够，见「待办」备注）
+8. **快捷键修饰键判定（2026-08-15，5e）**：`ControlMap` 的 Ctrl 分支必须**先判 Ctrl+数字**（且排除 shift/alt/meta），否则 Ctrl 会落入「其它修饰键不拦截」分支；事件过滤器只装在 GLWidget 上，避免抢走按钮/输入框的默认按键行为
 
 ---
 
@@ -336,7 +355,7 @@ class WorldAdapter:
     armor_active: np.ndarray       # (N,) bool
     armor_confidence: np.ndarray   # (N,) float32  ← Phase 5 恒为 1.0
     armor_status: np.ndarray       # (N,) uint8    ← Phase 5 恒为 ACTIVE
-    armor_side: np.ndarray         # (N,) uint8    ← 0=ally, 1=enemy, 2=neutral
+    armor_side: np.ndarray         # (N,) uint8    ← 绝对阵营（Side：0=北约 1=华约 2=中立）
     armor_damaged_parts: np.ndarray  # (N, 5) bool  ← 每单位 5 个部位的损坏掩码（PartType 顺序）
 
     # ── 部件详情（命中时联动，HUD/详情面板读取）──
@@ -605,16 +624,19 @@ class Theme:
 
 | 新文件 | 职责 | 状态 |
 |--------|------|------|
-| `Airis/render/adapter.py` | WorldAdapter 渲染数据源抽象（Phase 5 透传 Real，Phase 8 切换 Twin；含部位损坏聚合 + 后勤视图 + 命名/聚合查询） | ✅ 5a+5b |
+| `Airis/render/adapter.py` | WorldAdapter 渲染数据源抽象（Phase 5 透传 Real，Phase 8 切换 Twin；含部位损坏聚合 + 后勤视图 + 命名/聚合查询 + armor_speed 速度视图） | ✅ 5a+5b+5e |
 | `Airis/render/picking.py` | 屏幕坐标 → 单位拾取（hover/click 判定，O(N) 屏幕距离最近） | ✅ 5c |
-| `Airis/ui/main_window.py` | **重构**：完整的主窗口布局 | ✅ 5a+5b |
-| `Airis/ui/narrative_overlay.py` | 对话面板（SidePanel Tab1） | ✅ 5b |
-| `Airis/ui/detail_panel.py` | 单位详情面板（SidePanel Tab4，**三级信息详细度**） | ✅ 5b（速度占位） |
+| `Airis/ui/main_window.py` | **重构**：完整的主窗口布局 + 快捷键事件过滤器 + 手动暂停 + 速度估计 + 特效喂入 | ✅ 5a+5b+5e |
+| `Airis/ui/narrative_overlay.py` | 对话面板（SidePanel Tab1；历史跨 Tab/结束后保留） | ✅ 5b+5e |
+| `Airis/ui/detail_panel.py` | 单位详情面板（SidePanel Tab4，**三级信息详细度**；级别 2 真实速度） | ✅ 5b+5e |
 | `Airis/ui/archive_panel.py` | 档案库骨架（SidePanel Tab2） | ✅ 5b 骨架 |
 | `Airis/ui/briefing_panel.py` | 战斗简报面板（SidePanel Tab3） | ✅ 5b 骨架 |
 | `Airis/render/theme.py` | ThemeManager + Theme | ✅ 5a |
-| `Airis/render/hud/overlay.py` | moderngl HUD 渲染（圆点标记 + 选中高亮；损坏/弹道线/命中标记待补） | ✅ 5c 部分 |
+| `Airis/render/hud/overlay.py` | moderngl HUD 渲染（圆点标记 + 选中高亮 + 圆环模式 + 线段 + 文字） | ✅ 5c+5e |
+| `Airis/render/hud/text.py` | **新增（5e）**：FontAtlas（PIL 字体图集）+ TextRenderer（实例化字符 quad） | ✅ 5e |
+| `Airis/render/effects.py` | **新增（5e）**：EffectLayer 战场特效事件缓冲（弹道线/命中标记，纯逻辑可单测） | ✅ 5e |
 | `Airis/render/hud/log_widget.py` | Qt 透明滚动日志（左下角叠加） | ✅ 5c |
+| `Airis/ui/controls.py` | **新增（5e）**：ControlMap 键盘 → 动作映射（叙事/命令队列快捷键） | ✅ 5e |
 
 ### 4.2 NarrativeOverlay（对话面板）✅ 已实施
 
@@ -648,10 +670,10 @@ class Theme:
 - `option_selected(dialogue_id: str, index: int)` → MainWindow 槽：调用 `narrative.on_player_choice()`
 - 无对话时隐藏选项区域，显示「待命中...」占位文本
 
-### 4.3 HUD 叠加层（moderngl 绘制）🔄 已部分实施
+### 4.3 HUD 叠加层（moderngl 绘制）✅ 已实施（5c 基础 + 5e 全量）
 
-**已落地**：单位状态圆点（阵营色）+ 选中高亮环（HUDOverlay 屏幕空间 NDC 实例化绘制，HUD pass 期间关闭深度测试）+ LogWidget 滚动日志。
-**待补**：单位文字标签 / 损坏 ⚠ 摘要文字 / 弹道线 / 命中标记（需字体纹理 / 事件源，留后续迭代）。
+**已落地（5c）**：单位状态圆点（阵营色）+ 选中高亮环（HUDOverlay 屏幕空间 NDC 实例化绘制，HUD pass 期间关闭深度测试）+ LogWidget 滚动日志。
+**已落地（5e）**：单位文字标签（FontAtlas 字体图集，选中亮黄/悬浮亮白/默认阵营色相）+ 损坏 ⚠ 摘要文字（橙色）+ 弹道线（fire 事件，射手→目标直线渐隐）+ 命中标记（hit/ricochet/destroyed 事件，扩张圆环 + 十字渐隐）。
 
 在 GLWidget 的 `paintGL()` 中，地形渲染完成后额外绘制：
 
@@ -849,13 +871,17 @@ class Theme:
 | 主题切换耗时 | < 100ms（无卡顿） | ✅ 5a 已达成 |
 | UI 帧率（地形 + 对话面板） | ≥ 30fps | ✅ 5a/5b 冒烟通过 |
 | 战斗帧率（2048 装甲 + 16384 弹丸 + UI） | ≥ 30fps | ⏳ Phase 6 压测 |
-| 鼠标/键盘事件 | 全部正确响应（拖拽旋转 + 滚轮缩放 + 选项点击 + 拾取/Esc） | ✅ 5c |
+| 鼠标/键盘事件 | 全部正确响应（拖拽旋转 + 滚轮缩放 + 选项点击 + 拾取/Esc + 键盘快捷键） | ✅ 5c+5e |
 | 对话流程 | YAML 加载 → 触发器激活 → 选项显示 → 选择 → Command 入队，端到端通 | ✅ 5b（smoke 开场对话暂停/恢复） |
 | 暂停/恢复 | 对话激活时模拟暂停，选项选择后恢复，相机始终可控 | ✅ |
 | WorldAdapter 抽象 | GLWidget / HUD / DetailPanel 全部通过 WorldAdapter 读取数据，不直接访问 SimulationSnapshot.pools | ✅ |
 | 拾取交互 | 悬浮单位 → 级别 1；点击 → 级别 2；点击空白/Esc → 回退级别 0 | ✅ 5c |
-| 损坏部位显示 | HUD 状态标记在部件损坏时显示 `⚠`；DetailPanel 级别 2 显示部件逐项 ✓/✕ | 🔄 HUD 文字待补，DetailPanel ✅ |
-| 向后兼容 | `uv run python -m pytest` 全部通过（不含新增 GUI 测试） | ✅ 299 passed |
+| 损坏部位显示 | HUD 状态标记在部件损坏时显示 `⚠` 摘要；DetailPanel 级别 2 显示部件逐项 ✓/✕ | ✅ 5e（HUD）+ 5b（DetailPanel） |
+| 键盘快捷键（5e） | 空格暂停 / 回车推进 / 1-9 选选项（→ CommandQueue）/ S 跳过 / Ctrl+1/2/3 主题 / F1 帮助 | ✅ 5e（tests/test_phase5_effects.py ControlMap） |
+| HUD 战场特效（5e） | 弹道线（fire）+ 命中标记（hit/ricochet/destroyed）渐隐 | ✅ 5e（EffectLayer 单测） |
+| 单位真实速度（5e） | DetailPanel 级别 2 速度 = 渲染层位置差分 EMA（不动引擎） | ✅ 5e |
+| 对话历史跨 Tab 保留（5e） | 对话结束 / 切换 Tab 后历史保留，新对话激活时替换 | ✅ 5e |
+| 向后兼容 | `uv run python -m pytest` 全部通过（不含新增 GUI 测试） | ✅ 435 passed |
 
 ---
 
