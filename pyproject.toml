@@ -2,7 +2,7 @@
 name = "arkady-in-cradle"
 version = "0.1.0"
 description = "《Arkady in Cradle》—— 叙事驱动的战术兵棋推演器"
-readme = "Readme.txt"
+readme = "README.md"
 requires-python = ">=3.13,<3.14"
 dependencies = [
     "h5py",
