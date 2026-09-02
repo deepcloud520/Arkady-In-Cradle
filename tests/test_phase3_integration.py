@@ -16,7 +16,11 @@ import numpy as np
 import pytest
 
 from Airis.lulilo.combat.damage import ArmorType
-from Airis.lulilo.combat.engagement import FiringControl, UnitCombatConfig
+from Airis.lulilo.combat.engagement import (
+    FiringControl,
+    UnitCombatConfig,
+    solve_direct_fire_elevation,
+)
 from Airis.lulilo.core.rng import RNGManager
 from Airis.lulilo.entities.pools import (
     ArmorPool,
@@ -55,6 +59,10 @@ class FixedRNG:
 
     def dispersion_offset(self, sigma: float) -> tuple[float, float]:
         return (0.0, 0.0)
+
+    def chance_batch(self, prob, size: int) -> np.ndarray:
+        """试验桩：禁止归一化暴击（恒 False）→ 回到纯血量确定性判定。"""
+        return np.zeros(size, dtype=bool)
 
 
 DEFAULT_PARTS = [
@@ -100,14 +108,23 @@ def spawn_tank(
     health: float = 100.0,
     parts: list | None = None,
 ) -> int:
-    """生成一辆带全套碰撞箱的坦克（车体/炮塔/引擎/履带/弹药架）。"""
+    """生成一辆带全套碰撞箱的坦克（车体/炮塔/引擎/履带/弹药架）。
+
+    parts 元组：7 元素 (part, hx, hy, hz, lx, ly, lz) 或
+    9 元素追加 (armor_mm, shock_factor)——部位自身装甲厚度 + 震荡系数
+    （2026-08-18；缺省 0/1.0 → 命中判定兜底整车值）。
+    """
     idx = armor.spawn(
         x, y, 0.0,
         half_x=1.5, half_y=3.0, half_z=1.0,
         yaw=yaw,
     )
-    for part, hx, hy, hz, lx, ly, lz in (parts or DEFAULT_PARTS):
-        bidx = boxes.spawn(idx, int(part), hx, hy, hz, lx, ly, lz)
+    for spec in (parts or DEFAULT_PARTS):
+        part, hx, hy, hz, lx, ly, lz = spec[:7]
+        part_mm = float(spec[7]) if len(spec) > 7 else 0.0    # 局部部位厚度（勿遮蔽参数 armor_mm）
+        part_shock = float(spec[8]) if len(spec) > 8 else 1.0
+        bidx = boxes.spawn(idx, int(part), hx, hy, hz, lx, ly, lz,
+                           armor_mm=part_mm, shock_factor=part_shock)
         if int(part) == int(PartType.HULL):
             # HULL 初始血量（docs/part-health-design.md §2.3）
             boxes.hp[bidx] = health
@@ -219,6 +236,58 @@ class TestFiringBasics:
 
 
 # ===========================================================================
+# 直射火控仰角修正（2026-08-18：修复「直射弹道下坠」）
+# ===========================================================================
+
+
+class TestDirectFireSuperelevation:
+    def test_solve_direct_fire_elevation_signs(self) -> None:
+        """低伸解：近距（下坠<高度差）负仰角；远距（下坠>高度差）正仰角；不可达 None。"""
+        # 近距 200m：下坠 ≈0.08m < z0=0.5 → 炮口下压（负仰角）
+        near = solve_direct_fire_elevation(1555.0, 200.0, 0.5, 9.81)
+        assert near is not None and near < 0.0
+        # 远距 4000m：下坠 ≈33m > z0=0.5 → 上抛（正仰角）
+        far = solve_direct_fire_elevation(1555.0, 4000.0, 0.5, 9.81)
+        assert far is not None and far > 0.0
+        # 初速不足 → 不可达
+        assert solve_direct_fire_elevation(50.0, 4000.0, 0.5, 9.81) is None
+
+    def test_long_range_direct_fire_hits(self) -> None:
+        """长距直射不再下坠脱靶：超仰火控使弹丸落在目标中心高度。"""
+        armor, boxes, projectiles, ammo, fuel, fc = make_battlefield(
+            rng=FixedRNG(0.9)
+        )
+        m1 = spawn_tank(armor, boxes, ammo, fuel, fc, 0.0, 0.0)
+        t90 = spawn_tank(
+            armor, boxes, ammo, fuel, fc, 1500.0, 0.0,
+            yaw=np.pi, weapon="2a46m_125mm",
+            armor_mm=300.0, armor_type=int(ArmorType.RHA),
+        )
+        rec = fc.fire(m1, t90)
+        assert rec is not None
+        before = hull_health(armor, boxes, t90)
+        fc.tick(3.0)  # 1500m ≈ 0.96s 飞行，含超仰弧线
+        assert hull_health(armor, boxes, t90) < before
+        assert fc.pending_projectiles() == 0
+
+    def test_fire_leads_moving_target(self) -> None:
+        """前置量（预留量）：按目标速度预测命中点，aim 前移到预测位置。"""
+        armor, boxes, projectiles, ammo, fuel, fc = make_battlefield(
+            rng=FixedRNG(0.9)
+        )
+        m1 = spawn_tank(armor, boxes, ammo, fuel, fc, 0.0, 0.0)
+        t90 = spawn_tank(armor, boxes, ammo, fuel, fc, 500.0, 0.0, yaw=np.pi)
+        armor.vel[t90] = (10.0, 0.0, 0.0)  # 目标以 10 m/s 沿 +x 移动
+        rec = fc.fire(m1, t90)
+        assert rec is not None
+        # 前置量 = 速度 × 飞行时间（t ≈ R / 初速；M829A3 初速 1555 m/s）
+        mv = 1555.0
+        t_flight = 500.0 / mv
+        assert rec.aim_x == pytest.approx(500.0 + 10.0 * t_flight, abs=0.5)
+        assert rec.aim_y == pytest.approx(0.0, abs=1e-3)
+
+
+# ===========================================================================
 # 交战（命中 / 毁伤 / 部位 / 摧毁 / 回收）
 # ===========================================================================
 
@@ -307,7 +376,13 @@ class TestEngagement:
         assert counts["destroyed"] >= 1
 
     def test_part_damage_turret_via_physic_hit(self) -> None:
-        """物理命中炮塔（前凸布局）→ TURRET box 失活 → 无法开火。"""
+        """物理命中炮塔（前凸布局）→ TURRET box 失活 → 无法开火。
+
+        注（2026-08-18，穿深管线）：M829A3 现走 A-T 长杆模型（0m≈523mm，
+        物理模型，未启用标定锚），TURRET 270mm 单发后效 ≈45.7 < 60 满血，
+        需两发（双射手）才能毁伤炮塔；旧 DeMarre 单发 70.6 即可。测试意图
+        （炮塔毁 → 失能）不变，仅射弹数适配新穿深量级。
+        """
         armor, boxes, projectiles, ammo, fuel, fc = make_battlefield(
             rng=FixedRNG(0.9)
         )
@@ -318,6 +393,7 @@ class TestEngagement:
             (PartType.AMMO_RACK, 0.7, 0.8, 0.5, -0.5, 0.0, -0.3),
         ]
         m1 = spawn_tank(armor, boxes, ammo, fuel, fc, 0.0, 0.0)
+        m1b = spawn_tank(armor, boxes, ammo, fuel, fc, 20.0, 0.0)
         victim = spawn_tank(
             armor, boxes, ammo, fuel, fc, 500.0, 0.0,
             yaw=np.pi, weapon="2a46m_125mm",
@@ -325,10 +401,137 @@ class TestEngagement:
             parts=parts,
         )
         fc.fire(m1, victim)
+        fc.fire(m1b, victim)
         fc.tick(1.0)
         tmask = boxes.active & (boxes.parent == victim) & (boxes.part == int(PartType.TURRET))
         assert not np.any(tmask)  # 炮塔 box 被击毁失活
         assert not fc.can_fire(victim)
+
+    def test_part_damage_sets_armor_flag_for_renderer(self) -> None:
+        """部位毁伤 = 单位状态：TURRET 毁 → armor.parts_destroyed 置位（渲染层数据源）。
+
+        回归（2026-08-18）：旧渲染聚合靠 box.parent/active 推断，但引擎毁伤
+        即释放槽位（parent 置 -1、回 free_stack），已毁部位永远显示不出——
+        「一直扣血但部位不坏」。模拟层毁伤时必须同步置单位级标记。
+
+        注（2026-08-18，穿深管线）：A-T 长杆模型下单发后效不足以毁伤
+        TURRET 满血（60），用双射手两发（同 test_part_damage_turret_via_physic_hit）。
+        """
+        armor, boxes, projectiles, ammo, fuel, fc = make_battlefield(
+            rng=FixedRNG(0.9)
+        )
+        # 炮塔前凸布局（同 test_part_damage_turret_via_physic_hit）
+        parts = [
+            (PartType.HULL, 1.5, 3.0, 1.0, 0.0, 0.0, 0.0),
+            (PartType.TURRET, 1.0, 1.2, 0.6, 2.0, 0.0, 0.6),
+            (PartType.AMMO_RACK, 0.7, 0.8, 0.5, -0.5, 0.0, -0.3),
+        ]
+        m1 = spawn_tank(armor, boxes, ammo, fuel, fc, 0.0, 0.0)
+        m1b = spawn_tank(armor, boxes, ammo, fuel, fc, 20.0, 0.0)
+        victim = spawn_tank(
+            armor, boxes, ammo, fuel, fc, 500.0, 0.0,
+            yaw=np.pi, weapon="2a46m_125mm",
+            armor_mm=300.0, armor_type=int(ArmorType.RHA),
+            parts=parts,
+        )
+        # 满血单位：无部位毁伤
+        assert not np.any(armor.parts_destroyed[victim])
+        fc.fire(m1, victim)
+        fc.fire(m1b, victim)
+        fc.tick(1.0)
+        # 炮塔 box 已毁（槽位释放：active=False, parent=-1）…
+        tmask = boxes.active & (boxes.parent == victim) & (boxes.part == int(PartType.TURRET))
+        assert not np.any(tmask)
+        # …但单位级毁伤标记仍在（渲染层读这里，不依赖 box 槽位生命周期）
+        assert bool(armor.parts_destroyed[victim, int(PartType.TURRET)])
+        assert not armor.parts_destroyed[victim, int(PartType.HULL)]
+        assert not armor.parts_destroyed[victim, int(PartType.AMMO_RACK)]
+
+    def test_per_part_armor_mm(self) -> None:
+        """每部位自身装甲厚度（BoxPool.armor_mm）覆盖整车兜底值。
+
+        回归（2026-08-18）：部位厚度不再统一由 cfg.armor_mm × PART_ARMOR_FACTOR
+        推导。TRACK 700mm（>650 穿深）不穿；TRACK 100mm 击穿毁伤——
+        旧兜底 900×0.5=450mm 两车都会穿，区分不出薄厚。
+        """
+        armor, boxes, projectiles, ammo, fuel, fc = make_battlefield(
+            rng=FixedRNG(0.9)
+        )
+        # 两个射手（m256 冷却 10s，单射手连发第二发会被冷却挡掉）
+        m1a = spawn_tank(armor, boxes, ammo, fuel, fc, 0.0, 0.0)
+        m1b = spawn_tank(armor, boxes, ammo, fuel, fc, 20.0, 0.0)
+
+        def _mk(x: float, y: float, track_mm: float) -> int:
+            # TRACK 前凸到局部 x=+1.6（半 0.5 → 世界 x∈[pos+1.1, pos+2.1]），
+            # yaw=π 时朝向射手；与 armor AABB（half_x=1.5）重叠 0.4m，
+            # 碰撞粗筛能命中（同 test_part_damage_turret_via_physic_hit 布局）
+            parts = [
+                (PartType.HULL, 1.5, 3.0, 1.0, 0.0, 0.0, 0.0, 900.0),
+                (PartType.TRACK, 0.5, 1.4, 0.5, 1.6, 0.0, 0.0, track_mm),
+            ]
+            return spawn_tank(
+                armor, boxes, ammo, fuel, fc, x, y,
+                yaw=np.pi, weapon="2a46m_125mm",
+                armor_mm=900.0, armor_type=int(ArmorType.RHA),
+                parts=parts,
+            )
+
+        thick = _mk(500.0, 0.0, 700.0)      # TRACK 700mm > 650 穿深 → 不穿
+        thin = _mk(600.0, 100.0, 100.0)     # TRACK 100mm < 650 → 击穿（y 错开，避免弹道误穿 thick）
+        # 直瞄前凸 TRACK 中心（yaw=π → 世界 x = pos_x − 1.6，z=0）：超仰火控后弹丸
+        # 落在该点命中 TRACK。旧测试靠「直瞄车顶 + 重力下坠误坠履带」命中，已随
+        # 直射弹道下坠修复失效（2026-08-18），改用 aim_at 显式瞄准履带。
+        fc.fire(m1a, thick, aim_at=(498.4, 0.0, 0.0))
+        fc.fire(m1b, thin, aim_at=(598.4, 100.0, 0.0))
+        fc.tick(1.0)
+        # 厚履带：部位 700mm 生效 → TRACK 未毁、仅微震荡
+        assert np.any(
+            boxes.active & (boxes.parent == thick) & (boxes.part == int(PartType.TRACK))
+        )
+        assert not armor.parts_destroyed[thick, int(PartType.TRACK)]
+        # 薄履带：击穿 → TRACK 毁伤（单位级标记置位）
+        assert not np.any(
+            boxes.active & (boxes.parent == thin) & (boxes.part == int(PartType.TRACK))
+        )
+        assert bool(armor.parts_destroyed[thin, int(PartType.TRACK)])
+
+    def test_shock_factor_zero_turret_no_shock_damage(self) -> None:
+        """无人炮塔（shock_factor=0）：打不穿也不传导震荡扣 HULL 血。
+
+        回归（2026-08-18）：未击穿震荡 = 后效 × SHOCK_DMG_RATIO × 部位 shock_factor。
+        T-14 式无人炮塔未击穿 → HULL 血完全不动；有人炮塔对照 → 仅微震荡。
+        """
+        armor, boxes, projectiles, ammo, fuel, fc = make_battlefield(
+            rng=FixedRNG(0.9)
+        )
+        # 两个射手（m256 冷却 10s，单射手连发第二发会被冷却挡掉）
+        m1a = spawn_tank(armor, boxes, ammo, fuel, fc, 0.0, 0.0)
+        m1b = spawn_tank(armor, boxes, ammo, fuel, fc, 20.0, 0.0)
+
+        def _mk(x: float, y: float, shock: float) -> int:
+            parts = [
+                (PartType.HULL, 1.5, 3.0, 1.0, 0.0, 0.0, 0.0, 900.0, 1.0),
+                (PartType.TURRET, 1.0, 1.2, 0.6, 2.0, 0.0, 0.6, 900.0, shock),
+            ]
+            return spawn_tank(
+                armor, boxes, ammo, fuel, fc, x, y,
+                yaw=np.pi, weapon="2a46m_125mm",
+                armor_mm=900.0, armor_type=int(ArmorType.RHA),
+                parts=parts,
+            )
+
+        auto = _mk(500.0, 0.0, 0.0)    # 无人炮塔（T-14 风格）
+        manned = _mk(600.0, 100.0, 1.0)  # 有人炮塔（y 错开，避免弹道误穿 auto）
+        fc.fire(m1a, auto)
+        fc.fire(m1b, manned)
+        fc.tick(1.0)
+        # 弹先碰前凸炮塔（900mm > 650 穿深）→ 未击穿
+        assert hull_health(armor, boxes, auto) == pytest.approx(100.0)   # 无人：零震荡
+        assert 0.0 < 100.0 - hull_health(armor, boxes, manned) <= 15.0   # 有人：微震荡
+        # 两车炮塔均未毁（未击穿），单位存活
+        assert not armor.parts_destroyed[auto, int(PartType.TURRET)]
+        assert not armor.parts_destroyed[manned, int(PartType.TURRET)]
+        assert armor.active[auto] and armor.active[manned]
 
     def test_miss_recycles_projectile(self) -> None:
         """脱靶（目标消失）→ 弹丸超龄回收 + miss 事件。"""

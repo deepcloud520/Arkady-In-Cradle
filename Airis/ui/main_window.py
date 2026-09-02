@@ -14,7 +14,6 @@
 """
 from __future__ import annotations
 
-import logging
 import time
 from pathlib import Path
 
@@ -23,16 +22,8 @@ from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtGui import QAction, QKeyEvent
 from PySide6.QtWidgets import QMainWindow, QSplitter, QTabWidget
 
-from Airis.lulilo.coordinates.grid import world_to_grid
-from Airis.lulilo.entities.pools import ArmorPool, BoxPool, PartType, ProjectilePool
-from Airis.lulilo.entities.side import Side, allegiance
-from Airis.lulilo.logistics.ammo import AmmoManager
-from Airis.lulilo.logistics.fuel import FuelManager
-from Airis.lulilo.movement.integrate import build_armor_movement_hook
-from Airis.lulilo.movement.pathfinding import GraphPathfinder
+from Airis.lulilo.core.logging import get_logger
 from Airis.lulilo.simulation.loop import SimulationLoop
-from Airis.lulilo.simulation.state import SimulationState
-from Airis.lulilo.terrain.dual_contour import DualContourBuilder
 from Airis.narrative.engine import NarrativeEngine
 from Airis.narrative.recorder import CombatEventRecorder
 from Airis.render.adapter import WorldAdapter
@@ -44,7 +35,8 @@ from Airis.ui.controls import ControlMap
 from Airis.ui.detail_panel import DetailPanel
 from Airis.ui.narrative_overlay import NarrativeOverlay
 
-logger = logging.getLogger(__name__)
+from Airis.Arkady_In_Cradle import world1
+logger = get_logger(__name__)
 
 # 项目根（story/ 目录定位）
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -63,7 +55,7 @@ _KIND_CN = {
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Arkady in Cradle — Phase 5 骨架")
+        self.setWindowTitle("[D8] Arkady in Cradle —— A fanfic work of Neuroverse")
         self.setGeometry(100, 100, 1280, 800)
 
         # ── UI 布局（先建 GLWidget，其 terrain 供模拟层采样单位高度）──
@@ -130,126 +122,14 @@ class MainWindow(QMainWindow):
     def _create_simulation(
         self,
     ) -> tuple[SimulationLoop, dict[int, str], dict[int, str]]:
-        """创建模拟层 + 演示编队 + 后勤 + 移动/悬挂管线，返回 (loop, unit_names, side_map)。
-
-        注意：ArmorPool.side 为绝对阵营 SoA 字段（entities/side.py Side 枚举）；
-        演示默认玩家=北约(0)，敌友中立由 allegiance() 派生。
-
-        🔥 2026-08-13 接入移动+悬挂（docs/suspension-slope-design.md §2）：
-        - 逻辑 WorldMesh = DualContourBuilder（连续场平滑 → 地面双线性斜面，
-          悬挂 pitch/roll 在 fBm 起伏上生效；build_adjacency=False 省扫描线）
-        - 编队设路标点（NavGraph 寻路，失败降级直线）→ movement hook 每帧
-          推进：integrate_3d → resolve_mesh → solve_suspension → resolve_contact
-        """
-        state = SimulationState()
-        armor = ArmorPool(capacity=64)
-        box = BoxPool(capacity=256)
-        proj = ProjectilePool(capacity=128)
-        ammo = AmmoManager(capacity=64)
-        fuel = FuelManager(capacity=64)
-        state.armor_pool = armor
-        state.box_pool = box
-        state.projectile_pool = proj
-        state.ammo = ammo
-        state.fuel = fuel
-
-        terrain = self.gl_widget.terrain
-        hf = terrain.heightfield
-        cs = hf.cs
-
-        # 逻辑 WorldMesh（连续场平滑，悬挂/移动 z 采样源；构建较慢，加载期一次）
-        logger.info("构建逻辑 WorldMesh（DualContour，约 4s）…")
-        world_mesh = DualContourBuilder(
-            hf,
-            continuous_ground=terrain.continuous_ground,
-            build_adjacency=False,  # 邻接仅供寻路（Phase C 未做），省 3s+
-        ).build()
-        logger.info("逻辑 WorldMesh 就绪：%d 面片", len(world_mesh.patches))
-        # 寻路服务（NavGraph 独立于 WorldMesh，0.3s 构建）
-        pathfinder = GraphPathfinder(terrain.nav_graph, cell_size=cs)
-        # 每车速度（m/s，沿路标点）
-        speed = np.zeros(armor.capacity, dtype=np.float32)
-
-        def _ground_z(wx: float, wy: float) -> float:
-            gx, gy = world_to_grid(wx, wy, cs)
-            gx = min(max(gx, 0), hf.width - 1)
-            gy = min(max(gy, 0), hf.height - 1)
-            return float(hf.surface_z(gx, gy, 0))
-
-        def _route(
-            start_w: tuple[float, float], end_w: tuple[float, float]
-        ) -> list[tuple[float, float]]:
-            """寻路路标点（≤8 个，wp 上限）；失败降级直线。"""
-            pts = pathfinder.find_path(start_w, end_w)
-            if not pts:
-                pts = [end_w]
-            if len(pts) > 8:
-                idxs = [int(k * (len(pts) - 1) / 7) for k in range(8)]
-                pts = [pts[i] for i in idxs]
-            return pts
-
-        def _squad(
-            x0: float, y0: float, side: int, yaw: float,
-            count: int = 8, target: tuple[float, float] = (128.0, 128.0),
-        ) -> int:
-            first = -1
-            for i in range(count):
-                wx = x0 + i * 6
-                wy = y0 + i * 6
-                aidx = armor.spawn(
-                    x=wx, y=wy, z=_ground_z(wx, wy),
-                    half_x=1.5, half_y=3.0, half_z=0.8,
-                    yaw=yaw,
-                )
-                armor.side[aidx] = side
-                # 后勤演示数据（Phase 5 DetailPanel 级别 0/2 显示）
-                ammo.state.set_unit(aidx, cap=40.0, initial=40.0 * (0.8 + 0.2 * i / count))
-                fuel.state.set_unit(aidx, cap=100.0, initial=100.0 * (0.85 + 0.15 * i / count))
-                # 路标点（寻路 → 悬挂在 fBm 起伏/桥上生效）
-                armor.set_waypoints(aidx, _route((wx, wy), target))
-                speed[aidx] = 5.0
-                if first < 0:
-                    first = aidx
-                # 车体 + 炮塔两个碰撞箱（Phase 3 部位毁伤演示）
-                hull_b = box.spawn(aidx, int(PartType.HULL), 1.5, 3.0, 0.8,
-                                   local_x=0.0, local_y=0.0, local_z=0.0)
-                armor.bind_hull(aidx, hull_b)  # 绑定 HULL box（part-health-design.md §2.2）
-                box.spawn(aidx, int(PartType.TURRET), 1.2, 1.2, 0.7,
-                          local_x=0.0, local_y=0.0, local_z=0.6)
-            return first
-
-        # 两队相向推进到峡谷长桥两端附近（穿越 fBm 起伏 + 可能上桥）
-        _squad(60, 60, int(Side.NATO), 0.0, target=(150.0, 128.0))
-        enemy_first = _squad(196, 196, int(Side.PACT), 3.14159, target=(110.0, 128.0))
-        box.sync_all_from_parent(armor)
-
-        # 演示损坏部位标记：敌军首车炮塔毁伤（HUD ⚠ 标记 Phase 5 即可生效）
-        for bi in range(box.capacity):
-            if box.parent[bi] == enemy_first and box.part[bi] == int(PartType.TURRET):
-                box.active[bi] = False
-                break
-
-        # 单位名称 + 阵营映射（渲染层 DetailPanel / 叙事层 recorder 消费）
-        unit_names: dict[int, str] = {}
-        side_map: dict[int, str] = {}
-        for idx in range(armor.capacity):
-            if armor.active[idx]:
-                side_int = int(armor.side[idx])
-                model = "T-90" if side_int == int(Side.NATO) else "T-72B3"
-                unit_names[idx] = f"{model} #{idx:02d}"
-                # 相对敌友派生：演示场景玩家=北约，中立 → "neutral"
-                side_map[idx] = allegiance(int(Side.NATO), -1, side_int, -1)
-
-        # 移动+悬挂管线（每帧推进；弹簧 dt=1/60 稳定域内）
-        loop = SimulationLoop(state=state)
-        loop.attach("movement", build_armor_movement_hook(armor, world_mesh, speed))
-        return loop, unit_names, side_map
+        return world1.create_simulation(self.gl_widget)
 
     # ------------------------------------------------------------------
     # 叙事层加载
     # ------------------------------------------------------------------
 
     def _load_story(self) -> None:
+        return  # 暂不加载 story/ 对话树（Phase 4 叙事层演示）
         dialogues_dir = PROJECT_ROOT / "story" / "dialogues"
         triggers_dir = PROJECT_ROOT / "story" / "triggers"
         if dialogues_dir.is_dir():

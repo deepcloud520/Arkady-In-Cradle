@@ -54,7 +54,21 @@ class RNGManager:
     def choice_batch(self, a: int, size: int) -> np.ndarray:
         """批量选择。"""
         return self._rng.integers(0, a, size)
+    def roll(self, sides: int) -> int:
+        """掷骰子：返回 [1, sides] 的整数。"""
+        return int(self._rng.integers(1, sides + 1))
+    def roll_batch(self, sides: int, size: int) -> np.ndarray:
+        """批量掷骰子。"""
+        return self._rng.integers(1, sides + 1, size)
+    def chance_batch(self, prob, size: int) -> np.ndarray:
+        """批量伯努利试验（归一化概率）：每个元素以对应概率 prob 为 True。
 
+        prob 可为标量或 (size,) 数组（[0,1]，自动 clip）。用于部位「一击报废」
+        暴击判定：把骰子玩法（roll>剩余血）归一为 [0,1) 均匀 vs 概率比较。
+        返回 bool 数组。
+        """
+        p = np.clip(np.asarray(prob, dtype=np.float32), 0.0, 1.0)
+        return self._rng.uniform(0.0, 1.0, size) < p
     # ------------------------------------------------------------------
     # 仿真专用
     # ------------------------------------------------------------------

@@ -38,6 +38,7 @@ from Airis.lulilo.entities.pools import (
     EMITTER_PARENT_PROJECTILE,
     ArmorPool,
     FormationAIPool,
+    PartType,
 )
 from Airis.lulilo.entities.side import Side, hostile
 from Airis.lulilo.movement.pathfinding import GraphPathfinder
@@ -538,6 +539,8 @@ class FormationAI:
     SUPPORT_RANGE_MULT = 1.5      # 接触距离超成员最大射程 × 此倍数 → 请求炮兵支援
     SUPPORT_MIN_CONFIDENCE = 0.3  # 低于此置信度的接触不请求（看不清不打）
     SUPPORT_MAX_REQUESTS = 2      # 每 tick 每编队最多请求数
+    # ---- 部位毁伤行为（Phase 演示：引擎毁失机动 / 履带毁减速）----
+    TRACK_SPEED_CAP = 2.0         # 履带毁 → 减速上限 (m/s，演示正常速度 5)
 
     def __init__(
         self,
@@ -553,6 +556,7 @@ class FormationAI:
         # ---- Phase 6c 步骤⑨：RWR / 通信簇 ----
         rwr: RWRDetector | None = None,
         comm_network: CommunicationNetwork | None = None,
+        speed: Any | None = None,   # 可选：per-armor 速度数组（履带毁减速，演示装配传入）
     ) -> None:
         self.armor = armor
         self.formations = formations
@@ -564,6 +568,7 @@ class FormationAI:
         self.artillery = artillery
         self.rwr = rwr
         self.comm_network = comm_network
+        self.speed = None  # 可选：per-armor 移动速度数组（履带毁减速用，演示装配传入）
         self._members_cache: dict[int, list[int]] | None = None  # 每 tick 惰性缓存（性能）
         self._direct_fire_threats: list[tuple] | None = None    # 每 tick 预计算直射威胁
 
@@ -868,17 +873,44 @@ class FormationAI:
     # 单位 AI：执行
     # ------------------------------------------------------------------
 
+    def _part_active(self, i: int, part: int) -> bool:
+        """部位箱是否存活（无该部位箱 → True 不限制；毁 → False）。
+
+        部位毁伤行为基础：TURRET 毁 → can_fire（FiringControl 侧）；
+        ENGINE 毁 → 失机动；TRACK 毁 → 减速。
+        """
+        boxes = self.fc.boxes if self.fc is not None else self.boxes
+        if boxes is None:
+            return True
+        m = (boxes.parent == i) & (boxes.part == int(part))
+        if not np.any(m):
+            return True   # 无该部位箱（简化配置）→ 不限制
+        return bool(np.any(boxes.active[m]))
+
+    def _mobility_ok(self, i: int) -> bool:
+        """引擎毁 → 失机动（不能发起机动，原地作战）。"""
+        return self._part_active(i, int(PartType.ENGINE))
+
+    def _apply_part_mobility(self, i: int) -> None:
+        """履带毁 → 减速（speed 上限钳制，每 tick 应用幂等）。"""
+        if self.speed is None or i >= len(self.speed):
+            return
+        if not self._part_active(i, int(PartType.TRACK)):
+            self.speed[i] = min(float(self.speed[i]), self.TRACK_SPEED_CAP)
+
     def _execute_unit_orders(self) -> None:
         """单位 AI 执行：全部活跃装甲按 order 行动（无编队/通信断裂 → 自保）。
 
         炮兵成员（role=ARTILLERY）跳过——曲射由 ArtilleryAI 驱动（步骤⑤），
         不走直射/机动执行（docs §五.1「不直接参与直射」）。
+        部位毁伤行为：引擎毁 → 失机动（跳过机动）；履带毁 → 减速（每 tick 钳制）。
         """
         a = self.armor
         for i in a.active_indices():
             i = int(i)
             if int(a.role[i]) == int(UnitRole.ARTILLERY):
                 continue  # 炮兵编队 AI 负责（fire_indirect）
+            self._apply_part_mobility(i)   # 履带毁 → 减速
             fid = int(a.formation_id[i])
             # 无编队 或 编队已销毁 → 自保
             if fid < 0 or fid >= self.formations.capacity or not self.formations.active[fid]:
@@ -895,6 +927,8 @@ class FormationAI:
             elif order == int(UnitOrder.DEFEND):
                 self._execute_defend(i)
             elif order == int(UnitOrder.MANEUVER):
+                if not self._mobility_ok(i):
+                    continue   # 引擎毁 → 失机动
                 fid = int(a.formation_id[i])
                 # 队形保持（步骤⑦，docs §二.4）：成员按槽位偏移楔形展开，
                 # 锚点 = target_zone；单成员槽位 0 → 偏移 (0,0)，直达目标区
@@ -907,16 +941,18 @@ class FormationAI:
                     float(self.formations.target_zone[fid, 1]) + oy,
                 )
             elif order == int(UnitOrder.RETREAT):
-                self._move_retreat(i)
+                if self._mobility_ok(i):
+                    self._move_retreat(i)
             # HOLD：静默（不移动不射击）
 
     def _execute_engage(self, i: int) -> None:
-        """进攻：目标可打则开火，否则机动靠近目标。"""
+        """进攻：目标可打则开火，否则机动靠近目标（引擎毁 → 原地射击）。"""
         tid = int(self.armor.target_idx[i])
         if tid >= 0 and self.armor.active[tid]:
             if self._try_fire(i, tid):
                 return
-            self._move_toward_target(i, tid)
+            if self._mobility_ok(i):
+                self._move_toward_target(i, tid)
 
     def _execute_defend(self, i: int) -> None:
         """防御：只对进入射程的分配目标射击，不机动。"""

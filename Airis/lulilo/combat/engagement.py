@@ -44,7 +44,10 @@ from Airis.lulilo.combat.collision import (
 from Airis.lulilo.combat.damage import (
     ArmorType,
     DamageResolver,
+    PenetrationModel,
+    TARGET_ARMOR_MODEL,
     compute_armor_eff,
+    penetration_model_of,
     resolve_behind_armor_single,
     resolve_penetration_single,
 )
@@ -116,8 +119,10 @@ PROJECTILE_MAX_AGE = 20.0
 # 曲射弹丸最大寿命（秒）：45° 高抛下 T = √(2R/g)，R=15000m → ~55s；
 # 弹道解算保证必落点，故仅需一个宽松上限（docs §六.1 固定仰角模式）
 INDIRECT_MAX_AGE = 90.0
-# 弹丸回收边界（米），超出即视为脱靶/飞出战场
-WORLD_BOUND = 5000.0
+# 弹丸回收边界（米），超出即视为脱靶/飞出战场。
+# 2026-08-18：随 15km 演示地图放大（战场中央 7500 ± 1500 + 弹道余量 → 12000，
+# 覆盖整张 15km 地图任意战斗位置；曲射弹丸豁免出界回收，见 _recycle_stale）。
+WORLD_BOUND = 12000.0
 # 发射初始抬高（炮管高度，m）
 MUZZLE_HEIGHT = 1.5
 
@@ -129,7 +134,8 @@ SEEK_RADIUS_AIR_M = 12000.0     # Phase 7：AAM/SAM 对飞机的搜索半径（�
                                 # 搜索覆盖全射程——锁实时目标位 + PN 前置量；
                                 # 横切目标仍受 40g 转弯半径物理限制（真实兵棋亦然）
 
-# 部位 → 等效装甲厚度系数（简化：不同部位抗性不同）
+# 部位 → 等效装甲厚度系数（简化：不同部位抗性不同。
+# 注意：BoxPool.armor_mm > 0 时以部位自身厚度为准，本表仅作兜底）
 PART_ARMOR_FACTOR: dict[int, float] = {
     int(PartType.HULL): 1.0,
     int(PartType.TURRET): 0.9,
@@ -138,9 +144,18 @@ PART_ARMOR_FACTOR: dict[int, float] = {
     int(PartType.AMMO_RACK): 0.5,
 }
 
+# 未击穿震荡扣血比例：未击穿 = 后效伤害(hdmg, 2~15) × 该系数 × 部位 shock_factor。
+# 2026-08-18 调低（原全额 hdmg）：机炮车高射速打不穿正面时不应把 MBT 秒磨死，
+# 震荡只是刮痧，输出应靠击穿薄弱部位（TRACK/ENGINE）。
+SHOCK_DMG_RATIO = 0.1
+
 # 弹药殉爆爆炸参数（docs/part-health-design.md §四：小范围大威力）
 COOKOFF_RADIUS = 8.0        # 殉爆爆炸半径 (m)
 COOKOFF_STRENGTH = 300.0    # 殉爆中心毁伤量（本车 HULL=100 必归零 → 摧毁）
+
+# 多层装甲判定：穿 HULL 后内部组件（ENGINE 等）未穿透 → 弹丸车内爆炸的后效
+# 对整车 HULL 血量的冲击伤害（演示「过了 HULL 就炸了，后效打空 HULL 血」）
+INTERNAL_BURST_DMG = 45.0
 
 # 地面爆炸破片锥半角（°；炮击落点爆炸比直射命中更张开）
 INDIRECT_FRAG_HALF_ANGLE_DEG = 60.0
@@ -187,6 +202,40 @@ def solve_ballistic(
     if t <= 0.0:
         return None
     return v, math.atan(t)
+
+
+def solve_direct_fire_elevation(
+    v: float,
+    R: float,
+    z0: float,
+    g: float,
+) -> float | None:
+    """直射火控仰角解算（低伸弹道，允许负仰角 = 下坡/近距离俯角瞄准）。
+
+    与 `solve_ballistic` 同一真空抛物线模型（直线 + 重力，与
+    `integrate_projectile_movement` 一致），但取「低伸解」且**不拒绝负仰角**：
+    当落点低于炮口（z0>0）且重力下坠小于该高度差时，正确仰角为轻微负值
+    （炮口下压）——这是坦克直射近距离/下坡目标的常态。`solve_ballistic`
+    会因 `t <= 0` 拒绝该解（间瞄炮兵永远上抛，无此需求），故直射单独成函数。
+
+    Args:
+        v: 初速 (m/s)。
+        R: 水平射距 (m)。
+        z0: 炮口相对目标高度 (m，>0 炮口更高)。
+        g: 重力加速度 (m/s²)。
+
+    Returns:
+        仰角 (rad，可为负)；射距超出该初速可达范围返回 None。
+    """
+    if R <= 1e-6 or v <= 0.0 or g <= 0.0:
+        return None
+    A = g * R * R / (2.0 * v * v)
+    disc = R * R - 4.0 * A * (A - z0)
+    if disc < 0.0:
+        return None  # 初速不足：射距不可达
+    # 低伸解（"-" 根）：平坦弹道；允许负值（下坡/近距离俯角）
+    t = (R - math.sqrt(disc)) / (2.0 * A)
+    return math.atan(t)
 
 
 @dataclass
@@ -412,6 +461,16 @@ class FiringControl:
             **(mods or {}),
         )
 
+        # 前置量（预留量）：按目标速度预测命中点，避免打「目标当前坐标」而脱靶。
+        # 平射飞行时间 ≈ R / 初速（高速动能弹近似；超仰弧线略长，误差可忽略）。
+        # 制导/地形目标（aim_at 显式坐标）无速度可依，跳过。
+        if aim_at is None and sol.muzzle_velocity > 0.0:
+            tv = self.armor.vel[target_idx]
+            if float(tv[0]) != 0.0 or float(tv[1]) != 0.0:
+                t_flight = range_m / sol.muzzle_velocity
+                aim_x = float(target_pos[0]) + float(tv[0]) * t_flight
+                aim_y = float(target_pos[1]) + float(tv[1]) * t_flight
+
         # 高斯散布（统计层 → 物理落点，design doc §2.3）
         disp_x, disp_y = self.rng.dispersion_offset(sol.sigma_m)
         hit_x = aim_x + disp_x
@@ -430,11 +489,31 @@ class FiringControl:
 
         speed = sol.muzzle_velocity
         ammo_def = self.weapon_system.registry.get_ammo(sol.ammo_id)
+
+        # 火控仰角修正（直射超仰）：无制导弹按真空弹道反解仰角，使弹丸重力下坠后
+        # 仍命中目标中心（修复「直射弹道下坠」——原 aim 直瞄 + 飞行下坠导致远距打低，
+        # dev-progress.md 2026-08-18）。制导弹保持直线瞄向目标（制导律自行修正，无需超仰）。
+        law_id = ammo_def.control_law_id
+        if not law_id:
+            Rh = float(np.hypot(dir_x, dir_y))
+            if Rh <= 1e-9:
+                return None
+            # 炮口相对目标中心高度（>0 炮口更高）；低伸解允许负仰角
+            elev = solve_direct_fire_elevation(speed, Rh, oz - aim_z, self.gravity)
+            if elev is None:
+                return None  # 射距超出该初速可达范围：火控解不出仰角
+            vh = speed * math.cos(elev)
+            vx = dir_x / Rh * vh
+            vy = dir_y / Rh * vh
+            vz = speed * math.sin(elev)
+        else:
+            vx = dir_x / norm * speed
+            vy = dir_y / norm * speed
+            vz = dir_z / norm * speed
+
         proj_idx = self.projectiles.spawn(
             ox, oy, oz,
-            dir_x / norm * speed,
-            dir_y / norm * speed,
-            dir_z / norm * speed,
+            vx, vy, vz,
             radius=0.08,
             dmg=float(ammo_def.pen_mm_rha),
             kind=int(self._kind_of(sol.ammo_id)),
@@ -1283,7 +1362,10 @@ class FiringControl:
                 self._apply_part_damage(armor_idx, part, health_dmg, result["cookoff"])
             else:
                 # 未击穿（攻顶穿过薄弱区但未击穿）：结构震荡扣 HULL
-                self._subtract_hull_health(armor_idx, health_dmg)
+                # （× 震荡比例 × HULL 震荡系数；无人车体 shock=0 → 不扣）
+                hj = int(self.armor.hull_idx[armor_idx])
+                shock = float(self.boxes.shock_factor[hj]) if hj >= 0 else 1.0
+                self._subtract_hull_health(armor_idx, health_dmg * SHOCK_DMG_RATIO * shock)
             if self._hull_health(armor_idx) <= 0.0:
                 self._destroy_armor(armor_idx, cause="health")
         return result
@@ -1956,7 +2038,13 @@ class FiringControl:
     # ------------------------------------------------------------------
 
     def _resolve_hit(self, hit: CollisionHit, sub_dt: float) -> None:
-        """解析一次命中：部位判定 → 斜距/穿透 → 后效毁伤 → SoA 更新。"""
+        """解析一次命中：部位判定 → 斜距/穿透 → 后效毁伤 → SoA 更新。
+
+        Phase 演示增强（多层装甲多次判定）：弹道沿路径命中本车的**所有**
+        活跃 box（按 t 升序）——先判外部 HULL 装甲（厚），穿透后弹道继续
+        进入内部，再判内部组件（ENGINE/AMMO_RACK）薄装甲；**剩余穿深逐层
+        递减**（穿 HULL 消耗一部分），未穿透 → 震荡扣 HULL 并停止。
+        """
         proj_idx = hit.proj_idx
         armor_idx = hit.armor_idx
 
@@ -1969,8 +2057,11 @@ class FiringControl:
         vel = self.projectiles.vel[proj_idx]
         p0 = p1 - vel * sub_dt
 
-        # 命中部位（BoxPool 精确判定，fallback 到最近 box）
-        part = self._resolve_hit_part(hit, p0, p1)
+        # 命中部位：沿弹道命中的所有活跃 box（t 升序；含外部 HULL + 内部 ENGINE 等）
+        box_hits = self._hit_boxes_sorted(hit, p0, p1)
+        if not box_hits:
+            return
+        first_part = box_hits[0][1]
 
         # 弹药参数（下沉 SoA 数组反查，取代 _proj_meta dict）
         ammo_idx = int(self.projectiles.ammo[proj_idx])
@@ -1989,9 +2080,6 @@ class FiringControl:
         if cfg is None:
             return
 
-        # 部位等效装甲厚度
-        armor_mm = cfg.armor_mm * PART_ARMOR_FACTOR.get(part, 1.0)
-
         # 入射角（速度方向 vs 命中点所在表面法线，正击=0°，擦过=90°）
         impact_angle = self._impact_angle(
             (hit.hit_x, hit.hit_y, hit.hit_z), vel, armor_idx
@@ -2002,58 +2090,124 @@ class FiringControl:
             is_heat = False
             drag_coeff = 0.15
             muzzle_vel = 1500.0
+            pen_model = None
         else:
             pen_rha = ammo.pen_mm_rha
             is_heat = ammo.is_heat
             drag_coeff = ammo.drag_coefficient
             muzzle_vel = ammo.muzzle_velocity
+            # 穿深算法分派（docs/penetration-algorithms-design.md §三/§八）：
+            # 显式 penetration_model 优先；否则按弹种 + 长杆参数齐全性自动派生。
+            if ammo.penetration_model >= 0:
+                pen_model = int(ammo.penetration_model)
+            else:
+                has_rod = (
+                    ammo.penetrator_length_mm > 0.0
+                    and ammo.penetrator_strength_pa > 0.0
+                )
+                pen_model = penetration_model_of(ammo.ammo_type, has_rod)
 
         range_m = self._range_of(proj_idx, armor_idx)
 
-        # 毁伤解析（斜距 + 穿透 + 后效）
-        result = self.damage_resolver.resolve(
-            armor_idx=armor_idx,
-            armor_mm=armor_mm,
-            impact_angle_deg=impact_angle,
-            range_m=range_m,
-            pen_mm_rha=pen_rha,
-            is_heat=is_heat,
-            drag_coefficient=drag_coeff,
-            muzzle_velocity=muzzle_vel,
-            rng_u=self.rng.uniform(),
+        # 靶侧长杆参数（A-T 用；按装甲类型查表，缺省 RHA）
+        armor_type = self.damage_resolver.armor_type_of(armor_idx)
+        rho_t, Rt = TARGET_ARMOR_MODEL.get(
+            armor_type, TARGET_ARMOR_MODEL[int(ArmorType.RHA)]
         )
 
-        self.events.emit(
-            "hit",
-            {
-                "proj": proj_idx,
-                "target": armor_idx,
-                "shooter": owner,
-                "part": part,
-                "weapon": weapon_id,
-                "ammo": ammo_id,
-                "armor_eff": result["armor_eff"],
-                "margin": result["margin"],
-                "penetrated": result["margin"] > 0 and not result["ricochet"],
-                "health_dmg": result["health_dmg"],
-                "fire": result["fire"],
-            },
-        )
-
-        if result["ricochet"]:
-            self.events.emit(
-                "ricochet",
-                {"proj": proj_idx, "target": armor_idx, "part": part},
+        # 多层装甲判定：逐层用剩余穿深（穿 HULL 外甲 → 弹道进内部 → ENGINE 薄甲）
+        rem_pen = pen_rha
+        layer = 0
+        for _t, part, bidx in box_hits:
+            # 部位自身装甲厚度（BoxPool.armor_mm；0=未设置 → 兜底整车×部位系数）
+            box_mm = float(self.boxes.armor_mm[bidx]) if bidx >= 0 else 0.0
+            armor_mm = box_mm if box_mm > 0.0 else cfg.armor_mm * PART_ARMOR_FACTOR.get(part, 1.0)
+            # 分派参数：首层走算法模型；后续层剩余穿深直接比较（FIXED 语义）；
+            # 无分派（旧路径）→ 不传 model，逐层旧 DeMarre 衰减（历史行为）。
+            kwargs: dict[str, Any] = {}
+            if pen_model is not None:
+                if layer == 0:
+                    kwargs = dict(
+                        model=pen_model,
+                        velocity_alpha=ammo.velocity_alpha,
+                        penetrator_length_mm=ammo.penetrator_length_mm,
+                        penetrator_density=ammo.penetrator_density,
+                        penetrator_strength_pa=ammo.penetrator_strength_pa,
+                        target_density=rho_t,
+                        target_strength_pa=Rt,
+                        lo_beta=ammo.lo_beta,
+                        lo_k=ammo.lo_k,
+                    )
+                else:
+                    kwargs = dict(model=int(PenetrationModel.FIXED))
+            result = self.damage_resolver.resolve(
+                armor_idx=armor_idx,
+                armor_mm=armor_mm,
+                impact_angle_deg=impact_angle,
+                range_m=range_m,
+                pen_mm_rha=rem_pen,          # 剩余穿深（消耗递减）
+                is_heat=is_heat,
+                drag_coefficient=drag_coeff,
+                muzzle_velocity=muzzle_vel,
+                rng_u=self.rng.uniform(),
+                **kwargs,
             )
-            return  # 跳弹：弹丸继续飞行（保留动能），本次不造成毁伤
+            if layer == 0 and pen_model is not None:
+                # 首层算法穿深 → 作为后续层递减基准（A-T/DeMarre/LO 的实际穿深）
+                rem_pen = float(result["pen"])
+            if layer == 0:
+                # 第一层结果进事件（命中部位 = 首个 box；跳弹语义同前）
+                self.events.emit(
+                    "hit",
+                    {
+                        "proj": proj_idx,
+                        "target": armor_idx,
+                        "shooter": owner,
+                        "part": part,
+                        "weapon": weapon_id,
+                        "ammo": ammo_id,
+                        "armor_eff": result["armor_eff"],
+                        "margin": result["margin"],
+                        "penetrated": result["margin"] > 0 and not result["ricochet"],
+                        "health_dmg": result["health_dmg"],
+                        "fire": result["fire"],
+                    },
+                )
+                if result["ricochet"]:
+                    self.events.emit(
+                        "ricochet",
+                        {"proj": proj_idx, "target": armor_idx, "part": part},
+                    )
+                    return  # 跳弹：弹丸继续飞行（保留动能），本次不造成毁伤
 
-        # 结构损伤累积（part-health-design.md §三）：击穿扣命中部位血，未击穿扣 HULL
-        health_dmg = float(result["health_dmg"])
-        penetrated = result["margin"] > 0
-        if penetrated:
-            self._apply_part_damage(armor_idx, part, health_dmg, result["cookoff"])
-        else:
-            self._subtract_hull_health(armor_idx, health_dmg)
+            if result["ricochet"]:
+                break
+            if result["margin"] <= 0:
+                # 未穿透该层：
+                #   - 首层（外部 HULL）未穿 → 常规震荡（结构损伤 × 震荡比例 ×
+                #     部位震荡系数；无人炮塔 shock=0 → 完全不扣血）
+                #   - 已穿 HULL 后的内部层（ENGINE/AMMO_RACK）未穿 → 弹丸在车内
+                #     爆炸（引信触发/破片横扫），后效冲击作用整车 HULL 血量——
+                #     「过了 HULL 就炸了」：即使打不穿内部组件，后效也重创车体
+                if layer >= 1:
+                    self._subtract_hull_health(armor_idx, INTERNAL_BURST_DMG)
+                else:
+                    shock = (
+                        float(self.boxes.shock_factor[bidx]) if bidx >= 0 else 1.0
+                    )
+                    self._subtract_hull_health(
+                        armor_idx,
+                        float(result["health_dmg"]) * SHOCK_DMG_RATIO * shock,
+                    )
+                break
+            # 穿透该层：扣该部位血（HULL / TURRET / TRACK / 内部 ENGINE 等）
+            self._apply_part_damage(armor_idx, part, float(result["health_dmg"]),
+                                    result["cookoff"])
+            # 穿甲消耗：剩余穿深递减（多层多次判定的核心）
+            rem_pen = max(0.0, rem_pen - float(result["armor_eff"]))
+            layer += 1
+            if rem_pen <= 0.0:
+                break
 
         # 摧毁判据：HULL 归零（殉爆走爆炸池，由 _finalize_area_kills 统一结算）
         if self._hull_health(armor_idx) <= 0.0:
@@ -2114,12 +2268,27 @@ class FiringControl:
         if idxs.size:
             hp = b.hp[idxs] - health_dmg
             b.hp[idxs] = np.maximum(hp, 0.0)
-            dead = b.hp[idxs] <= 0.0
+            # 归一化暴击（2026-08-18）：P(一击报废) = 1 - 剩余/满血 = 累计损血比例。
+            # 骰子玩法（roll(1,hp_max) > 剩余血）归一为 [0,1) 均匀 vs 概率比较；
+            # 试验 RNG 桩 chance_batch 恒 False 可整体关闭暴击（回到纯血量判定）。
+            crit = self.rng.chance_batch(
+                1.0 - (hp / np.maximum(b.hp_max[idxs], 1e-9))**2, idxs.size
+            )
+            dead = (b.hp[idxs] <= 0.0) | crit
             dead_idxs = idxs[dead]
             if dead_idxs.size:
                 b.active[dead_idxs] = False
                 b.parent[dead_idxs] = -1
                 self.boxes._free_stack.extend(dead_idxs.tolist())
+                # 部位毁伤是**单位状态**：槽位已释放（parent=-1），渲染层
+                # 读 armor.parts_destroyed，不靠 box 槽位推断（2026-08-18）
+                self.armor.parts_destroyed[armor_idx, int(part)] = True
+                # HULL 暴击报废（hp>0；血尽路径由上层 _hull_health<=0 兜底）→ 整车失效；
+                # 否则 hull 槽位已释放而 _hull_health 仍读残血，装甲会「无 HULL 却存活」
+                if int(part) == int(PartType.HULL) and np.any(
+                    dead & (b.hp[idxs] > 0.0)
+                ):
+                    self._destroy_armor(armor_idx, cause="hull_destroyed")
         # 殉爆：AMMO_RACK 血归零 或 cookoff 掷骰命中
         if part == int(PartType.AMMO_RACK) and (
             cookoff or (idxs.size > 0 and np.any(b.hp[idxs] <= 0.0))
@@ -2166,6 +2335,7 @@ class FiringControl:
         hj = int(self.armor.hull_idx[armor_idx])
         if hj >= 0:
             self.boxes.hp[hj] = 0.0
+        self.armor.parts_destroyed[armor_idx] = True  # 整车毁 → 全部位毁
         self.armor.destroy(armor_idx)
 
         # Phase 6b：级联关闭该装甲的主动 emitter（红外除外，走残热）
@@ -2192,6 +2362,60 @@ class FiringControl:
     # ------------------------------------------------------------------
     # 内部辅助
     # ------------------------------------------------------------------
+
+    def _hit_boxes_sorted(
+        self, hit: CollisionHit, p0: np.ndarray, p1: np.ndarray
+    ) -> list[tuple[float, int, int]]:
+        """沿弹道命中的本车所有活跃 box，按命中参数 t 升序。
+
+        多层装甲多次判定的基础：弹道先碰外部 box（HULL/TURRET/TRACK），
+        穿透后继续进入内部 box（ENGINE/AMMO_RACK）——t 排序即命中顺序
+        （距离判断，docs 演示：先算暴露 HULL 装甲 → 穿后算内部 ENGINE 薄甲）。
+        """
+        armor_idx = hit.armor_idx
+        boxes = self.boxes
+        radius = float(self.projectiles.radius[hit.proj_idx])
+        hits: list[tuple[float, int, int]] = []
+        for b in range(boxes.capacity):
+            if not boxes.active[b] or boxes.parent[b] != armor_idx:
+                continue
+            hb, t = segment_aabb_single(
+                p0[0], p0[1], p0[2],
+                p1[0], p1[1], p1[2],
+                boxes.pos[b, 0], boxes.pos[b, 1], boxes.pos[b, 2],
+                boxes.half[b, 0], boxes.half[b, 1], boxes.half[b, 2],
+                radius,
+            )
+            if hb:
+                hits.append((t, int(boxes.part[b]), b))
+        hits.sort(key=lambda x: x[0])
+        # fallback：无精确 box 命中 → 最近 box（近似 AABB 偏差）
+        if not hits:
+            part = self._resolve_hit_part_fallback(hit)
+            if part is not None:
+                hits.append((0.0, part, -1))
+        return hits
+
+    def _resolve_hit_part_fallback(self, hit: CollisionHit) -> int | None:
+        """无精确 box 命中时的最近 box fallback（返回 PartType）。"""
+        armor_idx = hit.armor_idx
+        boxes = self.boxes
+        hx, hy, hz = hit.hit_x, hit.hit_y, hit.hit_z
+        best_d = 1e18
+        best = int(PartType.HULL)
+        for b in range(boxes.capacity):
+            if not boxes.active[b] or boxes.parent[b] != armor_idx:
+                continue
+            cx, cy, cz = boxes.pos[b]
+            hbx, hby, hbz = boxes.half[b]
+            dx = max(0.0, abs(hx - cx) - hbx)
+            dy = max(0.0, abs(hy - cy) - hby)
+            dz = max(0.0, abs(hz - cz) - hbz)
+            d = dx * dx + dy * dy + dz * dz
+            if d < best_d:
+                best_d = d
+                best = int(boxes.part[b])
+        return best
 
     def _resolve_hit_part(self, hit: CollisionHit, p0: np.ndarray, p1: np.ndarray) -> int:
         """命中部位：对命中装甲的所有活跃 box 做胶囊体检测，取 t 最小者。

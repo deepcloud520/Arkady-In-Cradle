@@ -134,6 +134,10 @@ class ArmorPool:
         yaw       (N,)   float32  朝向角 (rad)
         hull_idx  (N,)   int32    该装甲的 HULL 碰撞箱索引（-1 未绑定；
                                   血量权威来源 = BoxPool.hp，见 docs/part-health-design.md）
+        parts_destroyed (N, len(PartType)) bool_  部位毁伤掩码（PartType 顺序；
+                                  毁伤是**单位状态**，与 box 槽位生命周期解耦——
+                                  渲染层读这里，不靠 box.parent/active 推断
+                                  （部位毁伤会释放槽位，parent 置 -1，旧推断会丢信息））
         active    (N,)   bool_    存活掩码
         wp        (N, 8, 2) float32  路径拐点（世界坐标）
         wp_count  (N,)   uint8    拐点数量
@@ -156,6 +160,11 @@ class ArmorPool:
         self.half = np.zeros((self.capacity, 3), dtype=np.float32)
         self.yaw = np.zeros(self.capacity, dtype=np.float32)
         self.hull_idx = np.full(self.capacity, -1, dtype=np.int32)  # HULL box 索引（-1 未绑定）
+        # 部位毁伤掩码（2026-08-18：毁伤是单位状态，不靠 box 槽位推断——
+        # 引擎毁伤会释放槽位 parent=-1，渲染层再也看不到）
+        self.parts_destroyed = np.zeros(
+            (self.capacity, len(PartType)), dtype=np.bool_
+        )
         self.active = np.zeros(self.capacity, dtype=np.bool_)
         self.vel = np.zeros((self.capacity, 3), dtype=np.float32)  # 通过integrate_armor_movement之类更新的上次速度，供读取和空气动力学，不用于更新pos
 
@@ -261,12 +270,14 @@ class ArmorPool:
         self.wp[idx] = 0.0
         self.wp_count[idx] = 0
         self.wp_idx[idx] = 0
+        self.parts_destroyed[idx] = False  # 复用槽位：清除残留毁伤
         return idx
 
     def destroy(self, idx: int) -> None:
         """销毁装甲（标记 inactive，归还索引）。"""
         self.active[idx] = False
         self.hull_idx[idx] = -1
+        self.parts_destroyed[idx] = True  # 整车毁 → 全部位毁（残骸语义）
         self._free_stack.append(idx)
 
     def bind_hull(self, armor_idx: int, box_idx: int) -> None:
@@ -325,6 +336,9 @@ class ArmorPool:
         self.half = _resize(self.half, (new_cap, 3))
         self.yaw = _resize(self.yaw, (new_cap,))
         self.hull_idx = _resize(self.hull_idx, (new_cap,))
+        self.parts_destroyed = _resize(
+            self.parts_destroyed, (new_cap, len(PartType))
+        )  # 新区 zeros → False
         self.active = _resize(self.active, (new_cap,))
         self.wp = _resize(self.wp, (new_cap, 8, 2))
         self.wp_count = _resize(self.wp_count, (new_cap,))
@@ -567,6 +581,10 @@ class BoxPool:
         active    (N,)   bool_    存活掩码
         hp        (N,)   float32  当前部位血量（哨兵槽恒 0）
         hp_max    (N,)   float32  部位满血（spawn 时按 part 设定）
+        armor_mm  (N,)   float32  部位标称装甲厚度 (mm RHA；0 = 未设置，
+                                  命中判定兜底用整车 cfg.armor_mm × PART_ARMOR_FACTOR)
+        shock_factor (N,) float32 未击穿震荡传导系数 [0,1]（0 = 无人部位/舱段
+                                  不传导震荡；如 T-14 无人炮塔。默认 1.0）
     """
 
     def __init__(self, capacity: int = MAX_BOXES) -> None:
@@ -584,6 +602,10 @@ class BoxPool:
         self.active = np.zeros(alloc, dtype=np.bool_)
         self.hp = np.zeros(alloc, dtype=np.float32)
         self.hp_max = np.zeros(alloc, dtype=np.float32)
+        # 部位装甲厚度（0=未设置→兜底整车 cfg.armor_mm×PART_ARMOR_FACTOR）
+        self.armor_mm = np.zeros(alloc, dtype=np.float32)
+        # 未击穿震荡传导系数（0=无人舱段不传导；默认 1.0）
+        self.shock_factor = np.ones(alloc, dtype=np.float32)
 
         self._free_stack: list[int] = list(range(self.capacity))
 
@@ -602,6 +624,8 @@ class BoxPool:
         local_y: float = 0.0,
         local_z: float = 0.0,
         parent_kind: int = 0,
+        armor_mm: float = 0.0,
+        shock_factor: float = 1.0,
     ) -> int:
         """生成碰撞箱（局部偏移 + 半边长，世界位置由父装甲 pos/yaw 变换后填入）。
 
@@ -612,6 +636,10 @@ class BoxPool:
             part: 部位类型（PartType 枚举）。
             half_x, half_y, half_z: 碰撞箱局部半边长。
             local_x, local_y, local_z: 相对父装甲中心的局部偏移。
+            armor_mm: 部位标称装甲厚度 (mm RHA；0=未设置，命中判定兜底整车
+                cfg.armor_mm × PART_ARMOR_FACTOR)。
+            shock_factor: 未击穿震荡传导系数 [0,1]（0=无人舱段不传导震荡，
+                如 T-14 无人炮塔；默认 1.0 全传导）。
 
         Returns:
             碰撞箱索引。
@@ -629,6 +657,8 @@ class BoxPool:
         self.active[idx] = True
         self.hp[idx] = PART_MAX_HP.get(int(part), 100.0)
         self.hp_max[idx] = self.hp[idx]
+        self.armor_mm[idx] = float(armor_mm)
+        self.shock_factor[idx] = float(shock_factor)
         return idx
 
     def destroy(self, idx: int) -> None:
@@ -637,6 +667,8 @@ class BoxPool:
         self.parent[idx] = -1
         self.hp[idx] = 0.0
         self.hp_max[idx] = 0.0
+        self.armor_mm[idx] = 0.0
+        self.shock_factor[idx] = 1.0
         self._free_stack.append(idx)
 
     # ------------------------------------------------------------------
@@ -727,6 +759,9 @@ class BoxPool:
         self.active = _resize(self.active, (alloc,))
         self.hp = _resize(self.hp, (alloc,))
         self.hp_max = _resize(self.hp_max, (alloc,))
+        self.armor_mm = _resize(self.armor_mm, (alloc,))      # 新区 zeros → 0（未设置）
+        self.shock_factor = _resize(self.shock_factor, (alloc,))
+        self.shock_factor[old_cap:] = 1.0                     # 默认全传导（_resize 用 zeros）
 
         old_cap = self.capacity
         self.capacity = new_cap

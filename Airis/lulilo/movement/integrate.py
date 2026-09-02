@@ -34,6 +34,7 @@ def integrate_armor_movement(
     wp_count: np.ndarray,      # (N,) uint8
     wp_idx: np.ndarray,        # (N,) uint8
     speed: np.ndarray,         # (N,) float32  每单位当前速度 (m/s)
+    vel: np.ndarray,           # (N, 3) float32  上次速度向量（原地更新；火控前置量读 armor.vel）
     dt: float,                 # Tick 时长 (s)
     terrain_z_func: callable | None = None,  # 预留：地形采样（Phase 3 接入）
 ) -> None:
@@ -63,11 +64,19 @@ def integrate_armor_movement(
     n = pos.shape[0]
     for i in prange(n):
         if not active[i]:
+            vel[i, 0] = 0.0
+            vel[i, 1] = 0.0
+            vel[i, 2] = 0.0
             continue
 
+        ox = pos[i, 0]
+        oy = pos[i, 1]
         c = int(wp_idx[i])
         total = int(wp_count[i])
         if total == 0:
+            vel[i, 0] = 0.0
+            vel[i, 1] = 0.0
+            vel[i, 2] = 0.0
             continue  # 无路径，静止
 
         # 当前目标路标点
@@ -100,6 +109,11 @@ def integrate_armor_movement(
             pos[i, 1] += ny * step
             # 更新朝向
             yaw[i] = np.arctan2(ny, nx)
+
+        # 速度 = 本 tick 位移 / dt（火控前置量读 armor.vel；z 不参与前置量）
+        vel[i, 0] = (pos[i, 0] - ox) / dt
+        vel[i, 1] = (pos[i, 1] - oy) / dt
+        vel[i, 2] = 0.0
 
 
 @njit(cache=True)
@@ -304,6 +318,7 @@ def integrate_armor_movement_3d(
     wp_count: np.ndarray,      # (N,) uint8
     wp_idx: np.ndarray,        # (N,) uint8
     speed: np.ndarray,         # (N,) float32
+    vel: np.ndarray,           # (N, 3) float32  上次速度向量（原地更新；火控前置量读 armor.vel）
     dt: float,                 # Tick 时长 (s)
     mesh_id: np.ndarray,       # (N,) int32  —— 原地更新
     patch_v: np.ndarray,       # (total_v, 3) float32
@@ -334,8 +349,13 @@ def integrate_armor_movement_3d(
     n = pos.shape[0]
     for i in range(n):
         if not active[i]:
+            vel[i, 0] = 0.0
+            vel[i, 1] = 0.0
+            vel[i, 2] = 0.0
             continue
 
+        ox = pos[i, 0]
+        oy = pos[i, 1]
         c = int(wp_idx[i])
         total = int(wp_count[i])
         if total > 0:
@@ -360,6 +380,11 @@ def integrate_armor_movement_3d(
                 pos[i, 0] += nx * step
                 pos[i, 1] += ny * step
                 yaw[i] = np.arctan2(ny, nx)
+
+        # 速度 = 本 tick 水平位移 / dt（火控前置量读 armor.vel；z 随地形不参与前置量）
+        vel[i, 0] = (pos[i, 0] - ox) / dt
+        vel[i, 1] = (pos[i, 1] - oy) / dt
+        vel[i, 2] = 0.0
 
         # ---- mesh_id 局部性检查 + z 同步（双线性 bbox 判定，docs E1）----
         mid = mesh_id[i]
@@ -680,7 +705,7 @@ def build_armor_movement_hook(
         pv, vstart, vcnt, norm = flat
         integrate_armor_movement_3d(
             armor.pos, armor.yaw, armor.active,
-            armor.wp, armor.wp_count, armor.wp_idx, speed, float(dt),
+            armor.wp, armor.wp_count, armor.wp_idx, speed, armor.vel, float(dt),
             armor.mesh_id, pv, vstart, vcnt, norm,
         )
         resolve_mesh_ids(armor.pos, armor.mesh_id, world_mesh)

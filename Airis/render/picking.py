@@ -16,7 +16,7 @@ import logging
 import glm
 import numpy as np
 
-from Airis.render.adapter import WorldAdapter
+from Airis.render.adapter import AIR_HANDLE_OFFSET, WorldAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +86,7 @@ def pick_nearest(
     viewport_h: int,
     max_px: float = 30.0,
 ) -> int:
-    """拾取屏幕坐标附近最近的活跃单位。
+    """拾取屏幕坐标附近最近的活跃单位（地面装甲 + 空中单位双池）。
 
     Args:
         screen_x / screen_y: 鼠标屏幕坐标（像素）。
@@ -96,24 +96,46 @@ def pick_nearest(
         max_px: 命中判定半径（像素），超出则视为空白。
 
     Returns:
-        最近单位索引；无命中返回 -1。
+        选择句柄 handle：
+            - 地面装甲 = 装甲索引（与旧行为一致，向后兼容）；
+            - 空中单位 = AIR_HANDLE_OFFSET + aircraft_idx（decode_handle 解码）；
+            - 无命中返回 -1。
     """
-    if adapter is None or int(np.count_nonzero(adapter.armor_active)) == 0:
+    if adapter is None:
         return -1
+    best_handle = -1
+    best_dist = float(max_px)  # 初始 = 命中半径；只有更近的单位才覆盖
 
-    idx = np.flatnonzero(adapter.armor_active)
-    pos = adapter.armor_pos[idx]
-    screen, _ndc_z, _clip_w, visible = project_world(
-        pos, mvp, viewport_w, viewport_h
-    )
+    # ---- 地面装甲 ----
+    if adapter.armor_active is not None and int(np.count_nonzero(adapter.armor_active)) > 0:
+        idx = np.flatnonzero(adapter.armor_active)
+        pos = adapter.armor_pos[idx]
+        screen, _ndc_z, _clip_w, visible = project_world(
+            pos, mvp, viewport_w, viewport_h
+        )
+        dist = np.hypot(screen[:, 0] - screen_x, screen[:, 1] - screen_y)
+        dist = np.where(visible, dist, np.inf)
+        j = int(np.argmin(dist))
+        if np.isfinite(dist[j]) and dist[j] < best_dist:
+            best_dist = dist[j]
+            best_handle = int(idx[j])
 
-    dist = np.hypot(screen[:, 0] - screen_x, screen[:, 1] - screen_y)
-    dist = np.where(visible, dist, np.inf)
+    # ---- 空中单位（2026-08-18 修复：此前拾取只查 armor，飞机无法选中）----
+    ac_active = getattr(adapter, "aircraft_active", None)
+    if ac_active is not None and int(np.count_nonzero(ac_active)) > 0:
+        aidx = np.flatnonzero(ac_active)
+        apos = adapter.aircraft_pos[aidx]
+        screen, _ndc_z, _clip_w, visible = project_world(
+            apos, mvp, viewport_w, viewport_h
+        )
+        dist = np.hypot(screen[:, 0] - screen_x, screen[:, 1] - screen_y)
+        dist = np.where(visible, dist, np.inf)
+        j = int(np.argmin(dist))
+        if np.isfinite(dist[j]) and dist[j] < best_dist:
+            best_dist = dist[j]
+            best_handle = AIR_HANDLE_OFFSET + int(aidx[j])
 
-    j = int(np.argmin(dist))
-    if not np.isfinite(dist[j]) or dist[j] > max_px:
-        return -1
-    return int(idx[j])
+    return best_handle
 
 
 class Picker:

@@ -95,6 +95,29 @@ class TestRNGManager:
         assert np.all(arr >= 0)
         assert np.all(arr < 3)
 
+    def test_chance_batch_deterministic(self) -> None:
+        """chance_batch p=0 恒 False、p=1 恒 True。"""
+        rng = RNGManager(seed=0)
+        assert not np.any(rng.chance_batch(0.0, 100))
+        assert np.all(rng.chance_batch(1.0, 100))
+        assert rng.chance_batch(0.0, 100).dtype == np.bool_
+
+    def test_chance_batch_array_prob(self) -> None:
+        """chance_batch 支持逐元素概率数组（归一化暴击用法）。"""
+        rng = RNGManager(seed=0)
+        prob = np.array([0.0, 0.5, 1.0, 2.0, -1.0], dtype=np.float32)
+        out = rng.chance_batch(prob, prob.size)
+        assert out.shape == (5,)
+        assert not out[0]                     # p=0 恒 False
+        assert out[2]                         # p=1 恒 True（clip 后）
+        assert not out[4]                     # p<0 → clip 0 → False
+
+    def test_chance_batch_statistical(self) -> None:
+        """chance_batch(0.3) 大量试验后频率应接近 0.3。"""
+        rng = RNGManager(seed=0)
+        freq = float(np.mean(rng.chance_batch(0.3, 20000)))
+        assert 0.26 < freq < 0.34, f"p=0.3 时频率应接近 0.3，实际 {freq}"
+
     def test_hit_probability_deterministic(self) -> None:
         """hit_probability(1.0) 应永远命中，(0.0) 永远不命中。"""
         rng = RNGManager(seed=0)

@@ -228,6 +228,7 @@ class TestFlattenAndIntegrate:
         wp_count = np.zeros(n, dtype=np.uint8)
         wp_idx = np.zeros(n, dtype=np.uint8)
         speed = np.full(n, 10.0, dtype=np.float32)
+        vel = np.zeros((n, 3), dtype=np.float32)
         mesh_id = np.array([-1, -1], dtype=np.int32)
 
         # 先绑定：单位1 在地面 (3,3)，单位2 在桥面 (10,10)
@@ -236,7 +237,7 @@ class TestFlattenAndIntegrate:
         assert mesh_id[1] >= 0
 
         integrate_armor_movement_3d(
-            pos, yaw, active, wp, wp_count, wp_idx, speed, 1.0,
+            pos, yaw, active, wp, wp_count, wp_idx, speed, vel, 1.0,
             mesh_id, pv, vstart, vcnt, norm,
         )
         # 无路标点 → 不动；z 已同步
@@ -261,10 +262,11 @@ class TestFlattenAndIntegrate:
         wp_idx = np.zeros(n, dtype=np.uint8)
         wp[0, 0] = (9.0, 3.0)
         speed = np.full(n, 20.0, dtype=np.float32)
+        vel = np.zeros((n, 3), dtype=np.float32)
         mesh_id = np.array([mesh.locate_patch(3.0, 3.0, hint_z=0.0)], dtype=np.int32)
 
         integrate_armor_movement_3d(
-            pos, yaw, active, wp, wp_count, wp_idx, speed, 1.0,
+            pos, yaw, active, wp, wp_count, wp_idx, speed, vel, 1.0,
             mesh_id, pv, vstart, vcnt, norm,
         )
         # 已穿越（从地面格 → 越过桥区边缘），mesh_id 可能 -1（桥面 z=4 与地面 z=0 差 2=max_climb，地面面片不跨越桥）
@@ -386,10 +388,11 @@ class TestPatchSamplingE1:
         wp_idx = np.zeros(n, dtype=np.uint8)
         wp[0, 0] = (3.0, 3.0)
         speed = np.full(n, 10.0, dtype=np.float32)
+        vel = np.zeros((n, 3), dtype=np.float32)
         mesh_id = np.array([pid], dtype=np.int32)
 
         integrate_armor_movement_3d(
-            pos, yaw, active, wp, wp_count, wp_idx, speed, 1.0,
+            pos, yaw, active, wp, wp_count, wp_idx, speed, vel, 1.0,
             mesh_id, pv, vstart, vcnt, norm,
         )
         assert pos[0, 0] == pytest.approx(3.0)

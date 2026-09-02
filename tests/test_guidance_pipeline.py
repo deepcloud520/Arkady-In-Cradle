@@ -86,6 +86,10 @@ class _TestRNG:
     def normal(self, loc: float = 0.0, scale: float = 1.0) -> float:
         return float(self._np.normal(loc, scale))
 
+    def chance_batch(self, prob, size: int) -> np.ndarray:
+        """试验桩：禁止归一化暴击（恒 False）→ 回到纯血量确定性判定。"""
+        return np.zeros(size, dtype=bool)
+
 
 # 自定义控制回调：纯 PN、无推力（低速稳定命中测试，design §十 test_custom_control_law_injected）
 _GUIDANCE_STAGE_BALLISTIC = int(GuidanceStage.BALLISTIC)

@@ -119,6 +119,9 @@ def _restore_armor(data: dict) -> ArmorPool:
     for name in _ARMOR_AI_FIELDS:
         if name in data:
             setattr(pool, name, decode_ndarray(data[name]))
+    # 部位毁伤掩码（2026-08-18；旧存档缺失 → 构造默认全 False）
+    if "parts_destroyed" in data:
+        pool.parts_destroyed = decode_ndarray(data["parts_destroyed"])
     # 旧存档兼容（2026-08-15）：Phase 6c 前的相对阵营字段 team → 新 side（绝对阵营）
     if "team" in data and "side" not in data:
         pool.side = decode_ndarray(data["team"]).astype(np.uint8)
@@ -137,6 +140,11 @@ def _restore_boxes(data: dict) -> BoxPool:
         pool.hp_max = decode_ndarray(data["hp_max"])
     else:
         _rebuild_part_hp(pool)
+    # 2026-08-18：部位自身装甲厚度 + 震荡系数（旧存档缺失 → 构造默认）
+    if "armor_mm" in data:
+        pool.armor_mm = decode_ndarray(data["armor_mm"])
+    if "shock_factor" in data:
+        pool.shock_factor = decode_ndarray(data["shock_factor"])
     _rebuild_free_stack(pool, pool.active)
     return pool
 
@@ -380,6 +388,8 @@ def serialize_battlefield(
                     "wp": armor.wp,
                     "wp_count": armor.wp_count,
                     "wp_idx": armor.wp_idx,
+                    # 部位毁伤掩码（2026-08-18：毁伤是单位状态，渲染层读这里）
+                    "parts_destroyed": armor.parts_destroyed,
                     # Phase 6b：电磁特征
                     "rcs": armor.rcs,
                     "ecm": armor.ecm,
@@ -408,6 +418,9 @@ def serialize_battlefield(
                     "active": boxes.active,
                     "hp": boxes.hp,
                     "hp_max": boxes.hp_max,
+                    # 2026-08-18：部位自身装甲厚度 + 未击穿震荡系数
+                    "armor_mm": boxes.armor_mm,
+                    "shock_factor": boxes.shock_factor,
                 }
             ),
         }

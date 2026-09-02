@@ -269,16 +269,18 @@ def _make_movement_hook(
     def hook(_loop: Any, dt: float) -> None:
         for i in armor.active_indices():
             i = int(i)
+            px = float(armor.pos[i, 0])
+            py = float(armor.pos[i, 1])
             if int(armor.wp_count[i]) == 0:
+                armor.vel[i] = (0.0, 0.0, 0.0)
                 continue
             wi = int(armor.wp_idx[i])
             if wi >= int(armor.wp_count[i]):
                 armor.wp_count[i] = 0
+                armor.vel[i] = (0.0, 0.0, 0.0)
                 continue
             tx = float(armor.wp[i, wi, 0])
             ty = float(armor.wp[i, wi, 1])
-            px = float(armor.pos[i, 0])
-            py = float(armor.pos[i, 1])
             dx = tx - px
             dy = ty - py
             d = math.hypot(dx, dy)
@@ -290,5 +292,9 @@ def _make_movement_hook(
             else:
                 armor.pos[i, 0] = px + dx / d * step
                 armor.pos[i, 1] = py + dy / d * step
+            # 速度 = 本 tick 位移 / dt（火控前置量读 armor.vel；z 不参与前置量）
+            armor.vel[i, 0] = (float(armor.pos[i, 0]) - px) / float(dt)
+            armor.vel[i, 1] = (float(armor.pos[i, 1]) - py) / float(dt)
+            armor.vel[i, 2] = 0.0
 
     return hook

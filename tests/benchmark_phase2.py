@@ -49,7 +49,7 @@ def benchmark_movement_armor() -> None:
     integrate_armor_movement(
         pool.pos, pool.yaw, pool.active,
         pool.wp, pool.wp_count, pool.wp_idx,
-        speed, 0.016,
+        speed, pool.vel, 0.016,
     )
 
     # 计时

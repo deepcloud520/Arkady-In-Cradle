@@ -7,11 +7,36 @@
 
 ## Develop
 
-*Arkady in Cradle* is still in a early-developing version.please deploy it by uv.
+*Arkady in Cradle* is still in a early-developing version.
 
-**Current Status**: Phase 6/10 (Ground Forces) in progress — 2048 armour + 16k projectiles supported. Air & Data‑Link phases planned.
+**Current Status**: Phase 8/10 (Ground Forces) in progress — 2048 armour + 16k projectiles supported. complcate AI & Team Strategies & Missles in multi types upported.
 
----
+### Prerequisites
+
+- **Python >= 3.13**
+- **[uv](https://docs.astral.sh/uv/)** — used exclusively for package management (never bare `pip`)
+
+### Setup
+
+```bash
+uv sync     # creates .venv and installs all deps 
+```
+
+### Running Tests
+
+```bash
+uv run python -m pytest
+```
+
+All commands use `uv run` to ensure the correct venv is used without manual activation.
+
+## Quick Start (In early development stage)
+
+```bash
+uv run python main.py
+```
+
+## Contribution
 Specially thanks: **Neurosama**
 
 World setting Writer & Narrative Design:**Archotech Spore Eta**

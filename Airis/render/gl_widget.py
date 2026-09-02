@@ -22,7 +22,12 @@ from PySide6.QtGui import QKeyEvent, QMouseEvent, QWheelEvent
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 
 from Airis.lulilo.terrain.map import TerrainMap
-from Airis.render.adapter import WorldAdapter
+from Airis.render.adapter import (
+    AIR_HANDLE_OFFSET,
+    WorldAdapter,
+    decode_handle,
+    is_air_handle,
+)
 from Airis.render.camera import OrbitCamera
 from Airis.render.effects import EffectLayer
 from Airis.render.hud.overlay import HUDOverlay
@@ -34,40 +39,26 @@ logger = logging.getLogger(__name__)
 
 
 def _default_terrain() -> TerrainMap:
-    """默认演示地形：fBm 起伏 + 峡谷长桥 + 2 座普通桥（WorldMesh Phase B/D 展示）。
+    """默认演示地形（2026-08-18）：15km×15km 扁平地图（Phase 9 最小尺寸）。
 
-    可见效果：
-    - 平滑地面（continuous_ground 去量化，无 1m 台阶）
-    - **峡谷长桥**：山体被切开（峡谷）+ 桥墩支撑（现实山间桥梁）
-    - 普通桥的完整 3D（顶面 + 侧面 + 底面）
-    尺寸 256×256 控制 DualContour 构建在演示可接受范围。
+    - 400×400 格 × 37.5m = 15000m 见方；**全平**（amplitude=0，无桥/峡谷）——
+      大地图性能演示，地形构建不拖后腿（WorldMesh ~19s / NavGraph ~1s，加载期一次）；
+    - 战场位于地图中央 (7500, 7500) 附近（弹丸回收边界 WORLD_BOUND 已随
+      地图放大到 12000m，见 combat/engagement.py）。
     """
-    from Airis.lulilo.terrain.factory import (
-        CanyonBridgeConfig,
-        TerrainFactory,
-        TerrainFactoryConfig,
-    )
+    from Airis.lulilo.terrain.factory import TerrainFactory, TerrainFactoryConfig
 
     cfg = TerrainFactoryConfig(
-        width=256,
-        height=256,
-        cell_size=2.0,
+        width=400,
+        height=400,
+        cell_size=37.5,          # 15000m / 400 格
         seed=42,
-        amplitude=10.0,
+        amplitude=0.0,           # 扁平（无 fBm 起伏）
         noise_scale=18.0,
         octaves=4,
         bridge_lift=2.0,
-        bridges=[
-            {"x0": 60, "y0": 60, "x1": 120, "y1": 63},    # 普通横桥
-            {"x0": 200, "y0": 60, "x1": 203, "y1": 120},  # 普通纵桥
-        ],
-        canyon_bridge=CanyonBridgeConfig(
-            x0=40, y0=128, x1=215, y1=131,   # 长桥 176 格（352m），横跨山体
-            canyon_frac=0.3,                 # 中间 60% 挖成峡谷
-            canyon_depth=14.0,               # 峡谷挖深 14m
-            pier_interval=16,                # 桥墩间隔 16 格（32m）
-            pier_width=2,                    # 桥墩截面 2×2 格（4×4m）
-        ),
+        bridges=[],              # 无普通桥
+        canyon_bridge=None,      # 无峡谷长桥
     )
     return TerrainFactory.fbm(cfg)
 
@@ -79,6 +70,9 @@ class GLWidget(QOpenGLWidget):
     # 拾取信号（Phase 5c）：索引为装甲池索引，-1 = 空白/取消
     unit_hovered = Signal(int)
     unit_selected = Signal(int)
+
+    # 导弹尾迹长度（世界米，沿速度反方向；抛射体可视化用）
+    MISSILE_TRAIL_M = 8.0
 
     def __init__(
         self,
@@ -311,8 +305,9 @@ class GLWidget(QOpenGLWidget):
         )
 
         # 1) 选中高亮（大圆，黄色，先画在下层）
-        if self._selected_idx >= 0:
-            hit = np.where(idx == self._selected_idx)[0]
+        sel_armor = self._armor_of(self._selected_idx)
+        if sel_armor >= 0:
+            hit = np.where(idx == sel_armor)[0]
             if hit.size and visible[hit[0]]:
                 j = int(hit[0])
                 self.hud.render(
@@ -325,6 +320,42 @@ class GLWidget(QOpenGLWidget):
         self.hud.render(
             screen[visible], colors[visible], viewport_w, viewport_h, pixel_radius=6.0
         )
+
+        # 2.5) Phase 7 演示：空中单位标记（阵营色小圆点，读 adapter.aircraft_*）
+        ac = self._adapter
+        ac_active = getattr(ac, "aircraft_active", None)
+        if ac_active is not None and int(np.count_nonzero(ac_active)) > 0:
+            aidx = np.flatnonzero(ac_active)
+            apos = ac.aircraft_pos[aidx].copy()
+            apos[:, 2] += 0.5
+            ascreen, _, _, avis = project_world(
+                apos, self._mvp, viewport_w, viewport_h
+            )
+            if int(np.count_nonzero(avis)) > 0:
+                aside = getattr(ac, "aircraft_side", None)
+                if aside is None:
+                    aside = np.zeros(len(aidx), dtype=np.uint8)
+                acolors = np.array(
+                    [HUDOverlay.side_color(int(k)) for k in aside[aidx]],
+                    dtype=np.float32,
+                )
+                self.hud.render(
+                    ascreen[avis], acolors[avis], viewport_w, viewport_h,
+                    pixel_radius=4.0,
+                )
+                # 选中的空中单位高亮（大圆黄色；handle 编码见 picking.decode_handle）
+                sel_air = self._selected_idx if is_air_handle(self._selected_idx) else -1
+                if sel_air >= 0 and sel_air - AIR_HANDLE_OFFSET in set(aidx.tolist()):
+                    k = int(np.where(aidx == sel_air - AIR_HANDLE_OFFSET)[0][0])
+                    if avis[k]:
+                        self.hud.render(
+                            ascreen[k:k + 1],
+                            np.array([HUDOverlay.highlight_color()], dtype=np.float32),
+                            viewport_w, viewport_h, pixel_radius=9.0,
+                        )
+
+        # 2.6) 抛射体 / 导弹可视化（己方抛射体全绘 + 敌方已探测导弹）
+        self._render_projectiles(viewport_w, viewport_h)
 
         # 3) Phase 5e：战场特效（弹道线 + 命中标记，按墙钟时间渐隐）
         self._render_effects(viewport_w, viewport_h)
@@ -404,6 +435,71 @@ class GLWidget(QOpenGLWidget):
             )
 
     # ------------------------------------------------------------------
+    # 抛射体 / 导弹可视化（己方抛射体 + 敌方已探测导弹）
+    # ------------------------------------------------------------------
+
+    def _render_projectiles(self, viewport_w: int, viewport_h: int) -> None:
+        """绘制抛射体（己方全绘）与导弹（敌方仅「已探测」）。
+
+        数据经 WorldAdapter.projectile_markers 过滤：己方 = owner 阵营 == 玩家；
+        敌方导弹 = guid_law>=0 且 guid_confidence >= 门限（上帝视角下全绘）。
+        屏幕空间叠加：导弹画稍大圆点 + 沿速度反方向短尾迹，子弹画小圆点。
+        """
+        if self.hud is None or self._adapter is None or self._mvp is None:
+            return
+        pos, vel, is_missile, is_friendly = self._adapter.projectile_markers()
+        n = int(pos.shape[0])
+        if n == 0:
+            return
+
+        screen, _, _, visible = project_world(pos, self._mvp, viewport_w, viewport_h)
+        vis = np.asarray(visible, dtype=bool)
+        if not np.any(vis):
+            return
+
+        # 颜色：己方 = 青白；敌方已探测导弹 = 橙红告警
+        colors = np.zeros((n, 3), dtype=np.float32)
+        colors[is_friendly] = (0.55, 0.90, 1.00)
+        colors[~is_friendly] = (1.00, 0.45, 0.20)
+
+        # 分半径绘制：子弹小点 / 导弹稍大
+        for mflag, radius in ((False, 2.0), (True, 3.5)):
+            m = vis & (is_missile == mflag)
+            if np.any(m):
+                self.hud.render(
+                    screen[m], colors[m], viewport_w, viewport_h, pixel_radius=radius,
+                )
+
+        # 导弹尾迹（沿速度反方向的短线段）
+        segs: list[list[float]] = []
+        seg_colors: list[tuple[float, float, float, float]] = []
+        for k in np.flatnonzero(vis & is_missile):
+            spd = float(np.linalg.norm(vel[k]))
+            if spd < 1e-3:
+                continue
+            tail = pos[k] - vel[k] / spd * self.MISSILE_TRAIL_M
+            tscreen, _, _, tvis = project_world(
+                tail[None], self._mvp, viewport_w, viewport_h
+            )
+            if not bool(tvis[0]):
+                continue
+            segs.append(
+                [
+                    float(screen[k, 0]), float(screen[k, 1]),
+                    float(tscreen[0, 0]), float(tscreen[0, 1]),
+                ]
+            )
+            seg_colors.append(
+                (float(colors[k, 0]), float(colors[k, 1]), float(colors[k, 2]), 0.85)
+            )
+        if segs:
+            self.hud.render_lines(
+                np.asarray(segs, dtype=np.float32),
+                np.asarray(seg_colors, dtype=np.float32),
+                viewport_w, viewport_h, width_px=1.5,
+            )
+
+    # ------------------------------------------------------------------
     # Phase 5e：单位文字标签 + 损坏摘要
     # ------------------------------------------------------------------
 
@@ -423,8 +519,8 @@ class GLWidget(QOpenGLWidget):
         for j in np.flatnonzero(visible):
             unit_idx = int(idx[j])
             sx, sy = float(screen[j, 0]), float(screen[j, 1])
-            is_selected = unit_idx == self._selected_idx
-            is_hovered = unit_idx == self._hover_idx
+            is_selected = unit_idx == self._armor_of(self._selected_idx)
+            is_hovered = unit_idx == self._armor_of(self._hover_idx)
             if is_selected:
                 color = (1.0, 0.88, 0.35)
             elif is_hovered:
@@ -504,8 +600,17 @@ class GLWidget(QOpenGLWidget):
 
     # ---- 拾取辅助 ----
 
+    def _armor_of(self, handle: int) -> int:
+        """选择句柄 → 地面装甲索引（空中单位/无效 handle → -1）。
+
+        2026-08-18：拾取覆盖双池（armor + aircraft），hover/selected 存 handle；
+        渲染高亮只作用于地面装甲时需解码（空中高亮见 _render_hud_inner §2.5）。
+        """
+        kind, idx = decode_handle(handle)
+        return idx if kind == 0 else -1
+
     def _pick_at(self, x: float, y: float) -> int:
-        """用最近一帧 MVP 拾取屏幕坐标附近的单位。"""
+        """用最近一帧 MVP 拾取屏幕坐标附近的单位（返回 handle，见 picking）。"""
         if self._mvp is None:
             return -1
         return self._picker.pick(

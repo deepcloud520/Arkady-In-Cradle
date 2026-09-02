@@ -99,10 +99,11 @@ class TestIntegrateBatch:
         wp_count = np.ones(N, dtype=np.uint8)
         wp_idx = np.zeros(N, dtype=np.uint8)
         speed = np.full(N, 10.0, dtype=np.float32)
+        vel = np.zeros((N, 3), dtype=np.float32)
         return {
             "pos": pos, "yaw": yaw, "active": active,
             "wp": wp, "wp_count": wp_count, "wp_idx": wp_idx,
-            "speed": speed,
+            "speed": speed, "vel": vel,
         }
 
     def test_all_move_forward(self, arrays: dict) -> None:
@@ -111,7 +112,7 @@ class TestIntegrateBatch:
         integrate_armor_movement(
             arrays["pos"], arrays["yaw"], arrays["active"],
             arrays["wp"], arrays["wp_count"], arrays["wp_idx"],
-            arrays["speed"], dt=1.0,
+            arrays["speed"], arrays["vel"], dt=1.0,
         )
         assert np.all(arrays["pos"][:, 0] > old_x)
 
@@ -122,7 +123,7 @@ class TestIntegrateBatch:
         integrate_armor_movement(
             arrays["pos"], arrays["yaw"], arrays["active"],
             arrays["wp"], arrays["wp_count"], arrays["wp_idx"],
-            arrays["speed"], dt=1.0,
+            arrays["speed"], arrays["vel"], dt=1.0,
         )
         assert np.all(arrays["pos"][3] == old_pos3)
 
@@ -133,7 +134,7 @@ class TestIntegrateBatch:
         integrate_armor_movement(
             arrays["pos"], arrays["yaw"], arrays["active"],
             arrays["wp"], arrays["wp_count"], arrays["wp_idx"],
-            arrays["speed"], dt=1.0,
+            arrays["speed"], arrays["vel"], dt=1.0,
         )
         assert np.allclose(arrays["pos"], old_pos)
 
@@ -148,7 +149,7 @@ class TestIntegrateBatch:
         integrate_armor_movement(
             arrays["pos"], arrays["yaw"], arrays["active"],
             arrays["wp"], arrays["wp_count"], arrays["wp_idx"],
-            arrays["speed"], dt=1.0,
+            arrays["speed"], arrays["vel"], dt=1.0,
         )
         # 到达第一个路标点后 wp_idx 应为 1
         assert np.all(arrays["wp_idx"] == 1)
@@ -162,7 +163,7 @@ class TestIntegrateBatch:
         integrate_armor_movement(
             arrays["pos"], arrays["yaw"], arrays["active"],
             arrays["wp"], arrays["wp_count"], arrays["wp_idx"],
-            arrays["speed"], dt=1.0,
+            arrays["speed"], arrays["vel"], dt=1.0,
         )
         assert np.all(arrays["wp_count"] == 0)
         assert np.all(arrays["wp_idx"] == 0)
@@ -179,9 +180,44 @@ class TestIntegrateBatch:
         wp_count = np.ones(N, dtype=np.uint8)
         wp_idx = np.zeros(N, dtype=np.uint8)
         speed = np.full(N, 15.0, dtype=np.float32)
+        vel = np.zeros((N, 3), dtype=np.float32)
 
-        integrate_armor_movement(pos, yaw, active, wp, wp_count, wp_idx, speed, dt=0.016)
+        integrate_armor_movement(pos, yaw, active, wp, wp_count, wp_idx, speed, vel, dt=0.016)
         assert np.all(pos[:, 0] > 0)  # 都向前移动了
+
+    def test_velocity_written_when_moving(self) -> None:
+        """移动积分应写入 vel = 本 tick 位移 / dt（火控前置量数据源）。"""
+        N = 4
+        pos = np.zeros((N, 3), dtype=np.float32)
+        yaw = np.zeros(N, dtype=np.float32)
+        active = np.ones(N, dtype=np.bool_)
+        wp = np.zeros((N, 8, 2), dtype=np.float32)
+        wp[:, 0, 0] = 50.0   # 目标 x=50，纯 +x 方向
+        wp[:, 0, 1] = 0.0
+        wp_count = np.ones(N, dtype=np.uint8)
+        wp_idx = np.zeros(N, dtype=np.uint8)
+        speed = np.full(N, 10.0, dtype=np.float32)
+        vel = np.zeros((N, 3), dtype=np.float32)
+
+        integrate_armor_movement(pos, yaw, active, wp, wp_count, wp_idx, speed, vel, dt=1.0)
+        assert np.allclose(vel[:, 0], 10.0)
+        assert np.allclose(vel[:, 1], 0.0)
+        assert np.allclose(vel[:, 2], 0.0)
+
+    def test_velocity_zero_when_stationary(self) -> None:
+        """无路标点（静止）→ vel 归零（不残留旧速度）。"""
+        N = 2
+        pos = np.zeros((N, 3), dtype=np.float32)
+        yaw = np.zeros(N, dtype=np.float32)
+        active = np.ones(N, dtype=np.bool_)
+        wp = np.zeros((N, 8, 2), dtype=np.float32)
+        wp_count = np.zeros(N, dtype=np.uint8)  # 无路标点
+        wp_idx = np.zeros(N, dtype=np.uint8)
+        speed = np.full(N, 10.0, dtype=np.float32)
+        vel = np.full((N, 3), 99.0, dtype=np.float32)
+
+        integrate_armor_movement(pos, yaw, active, wp, wp_count, wp_idx, speed, vel, dt=1.0)
+        assert np.allclose(vel, 0.0)
 
 
 # ---------------------------------------------------------------------------

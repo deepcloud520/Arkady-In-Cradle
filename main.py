@@ -17,13 +17,17 @@ def main():
 
     app = QApplication(sys.argv)
     window = MainWindow()
-    # 调试/演示：相机对准战场区域（单位编队位于地图中央附近）
+
+    # 演示：三军交战（MainWindow._create_simulation 装配的完整调用链）——
+    #   15km×15km 扁平地图，战场在地图中央 (7500,7500)：坦克编队相向接敌、
+    #   双方炮兵曲射对轰 + 反炮闭环、双方空军迎头空战（AAM/坠毁链）。
+    # 相机拉高俯瞰整个 15km 战场（far=12000 覆盖全图）
     hf = window.gl_widget.terrain.heightfield
     cam = window.gl_widget.camera
     cam.target = (hf.width * hf.cs * 0.5, hf.height * hf.cs * 0.5, 0.0)
-    cam.distance = 200.0
+    cam.distance = 9500.0   # 俯瞰全图（zoom 上限 10000 内）
     cam.yaw = 45.0
-    cam.pitch = 40.0
+    cam.pitch = 45.0
     window.show()
     sys.exit(app.exec())
 

@@ -166,6 +166,16 @@ class AmmoConfig(BaseModel):
     # ---- Phase 7 空战（docs/phase7-air-pipeline.md §7.3）----
     prox_fuse_radius: float = 0.0         # 近炸引信半径 (m)：>0 时 AAM/SAM 与飞机相对距离 < 半径 → 近炸起爆
 
+    # ---- 穿深算法分派（docs/penetration-algorithms-design.md §7.1）----
+    # 全部带默认值，旧 YAML / 旧测试构造无需改动即通过校验（extra=forbid 下一次加齐）
+    penetration_model: int = -1           # PenetrationModel 整数值；-1=由 ammo_type 自动派生
+    velocity_alpha: float = 0.0           # 每米速度衰减系数 (1/m)；0=不衰减（旧行为）
+    penetrator_length_mm: float = 0.0     # 弹芯初始长度 L (mm)；>0 且 Yp>0 → APFSDS 走 A-T
+    penetrator_density: float = 17500.0   # ρp (kg/m³) WHA=17500 / DU=18600
+    penetrator_strength_pa: float = 0.0   # Yp 杆动态流应力 (Pa)；Tate 1986: 1.7·σyp
+    lo_beta: float = 0.67                 # 简化 Lanz-Odermatt β（WHA=0.67 / DU=0.72）
+    lo_k: float = 3.0                     # 简化 Lanz-Odermatt k（RHA）
+
     model_config = {"extra": "forbid"}
 
 
@@ -388,6 +398,11 @@ class WeaponRegistry:
                     muzzle_velocity=1555.0,
                     projectile_type=ProjectileType.BULLET,
                     drag_coefficient=0.15,
+                    # A-T 长杆参数（docs/penetration-algorithms-design.md §5.3/§7.1）
+                    penetrator_length_mm=780.0,      # 弹芯长度 (mm)
+                    penetrator_density=17500.0,      # WHA
+                    penetrator_strength_pa=3.0e9,    # Yp = 1.7·σyp（WHA BHN≈420）
+                    velocity_alpha=3.5e-5,           # ~50 m/s/km 减速
                 ),
                 AmmoConfig(
                     ammo_id="m830a1_heat",
@@ -459,6 +474,11 @@ class WeaponRegistry:
                     muzzle_velocity=1700.0,
                     projectile_type=ProjectileType.BULLET,
                     drag_coefficient=0.18,
+                    # A-T 长杆参数（docs/penetration-algorithms-design.md §5.3/§7.1）
+                    penetrator_length_mm=660.0,      # 弹芯长度 (mm)
+                    penetrator_density=17500.0,      # WHA
+                    penetrator_strength_pa=3.0e9,    # Yp = 1.7·σyp
+                    velocity_alpha=3.0e-5,           # ~45 m/s/km 减速
                 ),
                 AmmoConfig(
                     ammo_id="3bk18_heat",
@@ -468,6 +488,34 @@ class WeaponRegistry:
                     muzzle_velocity=905.0,
                     projectile_type=ProjectileType.MISSILE,
                     is_heat=True,
+                ),
+            ],
+        )
+        # ---- Phase 演示：T-14 机炮车（2A90 57mm 自动炮，低穿深高射速）----
+        reg.register_definition(
+            WeaponConfig(
+                weapon_id="2a90_57mm",
+                name="2A90 57mm 自动炮（T-14 机炮车）",
+                category=WeaponCategory.MAIN_GUN,
+                caliber_mm=57.0,
+                muzzle_velocity=1000.0,
+                base_accuracy_mrad=0.4,       # 自动炮火控良好
+                drag_coefficient=0.2,
+                fire_rate_rpm=120.0,          # 自动装填高射速
+                max_range_m=6000.0,
+                fire_control_stabilization=0.8,
+                compatible_ammo=["57mm_apfsds"],
+            ),
+            [
+                AmmoConfig(
+                    ammo_id="57mm_apfsds",
+                    name="57mm APFSDS",
+                    ammo_type=AmmoType.APFSDS,
+                    pen_mm_rha=300.0,         # 演示调参：能穿 MBT 炮塔/履带（薄部位），
+                                              # 正面（复合 375 等效）仍不穿 → 部位损伤可见
+                    muzzle_velocity=1000.0,
+                    projectile_type=ProjectileType.BULLET,
+                    drag_coefficient=0.2,
                 ),
             ],
         )
