@@ -11,15 +11,15 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from Airis.lulilo.entities.pools import (
+from Airia.lulilo.entities.pools import (
     AirFormationPool,
     AircraftPool,
     AircraftRole,
     ArmorPool,
 )
-from Airis.lulilo.movement.aerodynamics import AircraftAero, integrate_aircraft_motion
-from Airis.lulilo.movement.flight_control import FlightControl
-from Airis.lulilo.simulation.air_ai import (
+from Airia.lulilo.movement.aerodynamics import AircraftAero, integrate_aircraft_motion
+from Airia.lulilo.movement.flight_control import FlightControl
+from Airia.lulilo.simulation.air_ai import (
     AirFormationAI,
     AirFormationIntent,
     AirUnitOrder,

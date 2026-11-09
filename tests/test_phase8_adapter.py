@@ -11,18 +11,18 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from Airis.lulilo.entities.pools import ArmorPool
-from Airis.lulilo.entities.twin import (
+from Airia.lulilo.entities.pools import ArmorPool
+from Airia.lulilo.entities.twin import (
     TWIN_KIND_ARMOR,
     TwinPool,
     TwinStatus,
 )
-from Airis.render.adapter import (
+from Airia.render.adapter import (
     UnitRenderStatus,
     WorldAdapter,
     map_twin_render_status,
 )
-from Airis.lulilo.simulation.state import SimulationState
+from Airia.lulilo.simulation.state import SimulationState
 
 
 class TestStatusMapping:

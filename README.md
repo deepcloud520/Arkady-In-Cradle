@@ -1,4 +1,4 @@
-# Airis Engine — Arkady in Cradle（AIC）
+# Airia Engine — Arkady in Cradle（AIC）
 ---
 ## Profile
 《Arkady in Cradle》 is a sci-fi visual novel set in a fractured near-future world, blending real-time tactical wargaming with data-link warfare and fog-of-war mechanics. You play as *Arcadia*, a newly appointed EU commander, interacting with self-aware giant AIs, international megacorps, and splintered nations in the year 2060. Every tactical decision ripples through the narrative.
@@ -7,7 +7,7 @@
 
 ## Highlights
 
-- Narrative-first: the story is never skippable, but battles are — the simulation keeps running in the background either way
+- Narrative-first: the story is never skippable, but battles are.
 - Simulation core built on SoA object pools + Numba JIT (benchmarked at 2048 armour + 16k projectiles)
 - 2.5D column-span heightfield terrain, free terrain destruction, background NavGraph re-baking
 - Ground, artillery, and air forces integrated through data-link network-centric warfare (A-guides-B firing, twin-based fog of war)

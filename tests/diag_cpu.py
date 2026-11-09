@@ -17,7 +17,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(messag
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
-from Airis.ui.main_window import MainWindow
+from Airia.ui.main_window import MainWindow
 
 
 def main() -> int:

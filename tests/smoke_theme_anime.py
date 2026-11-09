@@ -27,7 +27,7 @@ from PySide6.QtCore import QTimer
 from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QApplication
 
-from Airis.ui.main_window import MainWindow
+from Airia.ui.main_window import MainWindow
 from _output import clean_output_dir, output_path
 
 # 背景（clear_color=(0.04,0.04,0.09) → 亮度 ~12）判定阈值

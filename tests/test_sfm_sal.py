@@ -16,12 +16,12 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from Airis.lulilo.combat.damage import ArmorType
-from Airis.lulilo.combat.engagement import FiringControl
-from Airis.lulilo.combat.guidance import GuidanceStage
-from Airis.lulilo.combat.sal import SALSystem
-from Airis.lulilo.combat.sfm import SfmScanner, scan_armor_detect
-from Airis.lulilo.combat.weapons import (
+from Airia.lulilo.combat.damage import ArmorType
+from Airia.lulilo.combat.engagement import FiringControl
+from Airia.lulilo.combat.guidance import GuidanceStage
+from Airia.lulilo.combat.sal import SALSystem
+from Airia.lulilo.combat.sfm import SfmScanner, scan_armor_detect
+from Airia.lulilo.combat.weapons import (
     AmmoConfig,
     AmmoType,
     GuidanceType,
@@ -30,7 +30,7 @@ from Airis.lulilo.combat.weapons import (
     WeaponRegistry,
     WeaponSystem,
 )
-from Airis.lulilo.entities.pools import (
+from Airia.lulilo.entities.pools import (
     EMITTER_KIND_ILLUMINATOR,
     EMITTER_KIND_IR_SOURCE,
     EMITTER_KIND_SEEKER,
@@ -39,8 +39,8 @@ from Airis.lulilo.entities.pools import (
     EmitterBand,
     ProjectileType,
 )
-from Airis.lulilo.terrain.heightfield import MAT_BRIDGE, NO_SURFACE, Heightfield
-from Airis.lulilo.terrain.map import TerrainMap
+from Airia.lulilo.terrain.heightfield import MAT_BRIDGE, NO_SURFACE, Heightfield
+from Airia.lulilo.terrain.map import TerrainMap
 from tests.test_guidance_pipeline import (
     _TestRNG,
     make_guided_fc,

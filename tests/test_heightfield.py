@@ -7,7 +7,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from Airis.lulilo.terrain.heightfield import (
+from Airia.lulilo.terrain.heightfield import (
     MAT_BRIDGE,
     MAT_TERRAIN,
     MAX_SPANS,

@@ -10,18 +10,18 @@ import math
 
 import pytest
 
-from Airis.lulilo.combat.engagement import FiringControl, UnitCombatConfig
-from Airis.lulilo.core.rng import RNGManager
-from Airis.lulilo.entities.pools import (
+from Airia.lulilo.combat.engagement import FiringControl, UnitCombatConfig
+from Airia.lulilo.core.rng import RNGManager
+from Airia.lulilo.entities.pools import (
     ArmorPool,
     BoxPool,
     FormationAIPool,
     PartType,
     ProjectilePool,
 )
-from Airis.lulilo.logistics.ammo import AmmoManager
-from Airis.lulilo.simulation.ai import FormationAI, UnitOrder
-from Airis.lulilo.simulation.loop import EventBus, SimulationLoop
+from Airia.lulilo.logistics.ammo import AmmoManager
+from Airia.lulilo.simulation.ai import FormationAI, UnitOrder
+from Airia.lulilo.simulation.loop import EventBus, SimulationLoop
 
 _SIMPLE_PARTS = [
     (PartType.HULL, 1.5, 3.0, 1.0, 0.0, 0.0, 0.0),

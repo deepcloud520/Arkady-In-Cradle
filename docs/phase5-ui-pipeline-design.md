@@ -12,8 +12,8 @@
 
 | 项 | 状态 |
 |----|------|
-| `Airis/render/adapter.py` WorldAdapter | ✅ 透传模式 + `_build_damaged_parts`（5 部位损坏聚合） |
-| `Airis/render/theme.py` ThemeManager | ✅ discover / load / switch 热切换 |
+| `Airia/render/adapter.py` WorldAdapter | ✅ 透传模式 + `_build_damaged_parts`（5 部位损坏聚合） |
+| `Airia/render/theme.py` ThemeManager | ✅ discover / load / switch 热切换 |
 | 着色器外提 `assets/shaders/default/` + `constructivism/` | ✅（anime 待 5d） |
 | `gl_widget.py`：主题接入 + WorldAdapter + 单位标记实例化 | ✅ |
 | `main_window.py` 骨架：QSplitter + 主题菜单 + 主循环 | ✅ |
@@ -23,10 +23,10 @@
 
 | 项 | 状态 |
 |----|------|
-| `Airis/ui/` 四面板（NarrativeOverlay / DetailPanel / ArchivePanel / BriefingPanel） | ✅ QTabWidget 4 Tab（对话/档案/简报/详情）+ 信号槽接线 |
-| `Airis/render/picking.py` Picker | ✅ 屏幕坐标 → O(N) 最近单位（project_world 向量化，与 glm 逐元素一致） |
-| `Airis/render/hud/overlay.py` HUDOverlay | ✅ 屏幕空间圆点标记 + 选中高亮（NDC 实例化，关闭深度测试） |
-| `Airis/render/hud/log_widget.py` LogWidget | ✅ Qt 透明滚动日志（左下角叠加，200 行上限） |
+| `Airia/ui/` 四面板（NarrativeOverlay / DetailPanel / ArchivePanel / BriefingPanel） | ✅ QTabWidget 4 Tab（对话/档案/简报/详情）+ 信号槽接线 |
+| `Airia/render/picking.py` Picker | ✅ 屏幕坐标 → O(N) 最近单位（project_world 向量化，与 glm 逐元素一致） |
+| `Airia/render/hud/overlay.py` HUDOverlay | ✅ 屏幕空间圆点标记 + 选中高亮（NDC 实例化，关闭深度测试） |
+| `Airia/render/hud/log_widget.py` LogWidget | ✅ Qt 透明滚动日志（左下角叠加，200 行上限） |
 | GLWidget 拾取 | ✅ hover/单击/Esc 信号 `unit_hovered`/`unit_selected`；拖拽阈值区分 |
 | MainWindow 装配 | ✅ recorder + AmmoManager/FuelManager + set_unit_context + QTabWidget + LogWidget |
 | 验证 | ✅ 299 passed；smoke_gui 通过；HUD 像素统计 ally=1585/enemy=2596 |
@@ -43,15 +43,15 @@
 
 | 项 | 状态 |
 |----|------|
-| `Airis/render/hud/text.py` FontAtlas + TextRenderer | ✅ PIL 字体图集（ASCII + 中文部位/阵营名 + ⚠）+ 实例化字符 quad 绘制 |
+| `Airia/render/hud/text.py` FontAtlas + TextRenderer | ✅ PIL 字体图集（ASCII + 中文部位/阵营名 + ⚠）+ 实例化字符 quad 绘制 |
 | HUD 单位文字标签（单位名，选中/悬浮高亮色） | ✅ GLWidget._render_labels，读 WorldAdapter.unit_name |
 | HUD 损坏 ⚠ 摘要文字 | ✅ `⚠ 引擎 履带`（橙色，读 damaged_parts） |
-| `Airis/render/effects.py` EffectLayer（弹道线/命中标记缓冲） | ✅ 纯逻辑可无头单测：fire→弹道线，hit/ricochet/destroyed→命中标记，墙钟时间老化 + 上限防刷屏 |
+| `Airia/render/effects.py` EffectLayer（弹道线/命中标记缓冲） | ✅ 纯逻辑可无头单测：fire→弹道线，hit/ricochet/destroyed→命中标记，墙钟时间老化 + 上限防刷屏 |
 | 弹道线（射手→目标，渐隐） | ✅ HUDOverlay.render_lines 线段实例化渲染 |
 | 命中标记（扩张圆环 + 十字，渐隐） | ✅ HUDOverlay.render_ring（u_mode=1 软边圆环）+ render_lines |
 | DetailPanel 级别 2 真实速度 | ✅ 渲染层位置差分 + EMA（`_estimate_speed`，不动引擎；adapter.armor_speed） |
 | 对话历史跨 Tab / 结束后保留 | ✅ NarrativeOverlay._set_idle 不再清空历史（新对话激活时整体替换） |
-| `Airis/ui/controls.py` ControlMap（键盘→动作） | ✅ 空格暂停 / 回车推进 / 1-9 选选项（→ CommandQueue）/ S 跳过 / Ctrl+1/2/3 主题 / F1 帮助 |
+| `Airia/ui/controls.py` ControlMap（键盘→动作） | ✅ 空格暂停 / 回车推进 / 1-9 选选项（→ CommandQueue）/ S 跳过 / Ctrl+1/2/3 主题 / F1 帮助 |
 | MainWindow 手动暂停（与对话暂停独立） | ✅ `_manual_paused` + 事件过滤器（GLWidget.installEventFilter） |
 | 验证 | ✅ 435 passed（新增 tests/test_phase5_effects.py 15 用例） |
 
@@ -75,7 +75,7 @@
 
 ## 零、现有资产盘点
 
-### 0.1 渲染层（`Airis/render/`）— 已有
+### 0.1 渲染层（`Airia/render/`）— 已有
 
 | 模块 | 文件 | 职责 | Phase 5 改动 |
 |------|------|------|-------------|
@@ -83,13 +83,13 @@
 | GL 控件 | `gl_widget.py` | `QOpenGLWidget`：地形网格渲染 + 相机交互 | **重构**：着色器外提 → 主题系统；内联 VERTEX_SHADER/FRAGMENT_SHADER 移到外部文件 |
 | HUD 占位 | `hud/__init__.py` | 空壳，注释标明「待实现」 | **实现**：单位状态标记、弹道线、日志滚动条 |
 
-### 0.2 UI 层（`Airis/ui/`）— 已有
+### 0.2 UI 层（`Airia/ui/`）— 已有
 
 | 模块 | 文件 | 职责 | Phase 5 改动 |
 |------|------|------|-------------|
 | 主窗口 | `main_window.py` | `MainWindow(QMainWindow)`：仅含 GLWidget + 状态栏相机信息 | **重度重构**：增加面板布局、菜单栏、工具栏、信号槽 |
 
-### 0.3 叙事层（`Airis/narrative/`）— 已有
+### 0.3 叙事层（`Airia/narrative/`）— 已有
 
 | 模块 | 文件 | 职责 | Phase 5 改动 |
 |------|------|------|-------------|
@@ -324,7 +324,7 @@ Phase 5 通过 **WorldAdapter** 抽象层落实这一法则：
 > `ammo_at(i)` / `fuel_at(i)` / `get_stats()`（级别 0 聚合：双方兵力 / 平均弹药燃料 / 模拟时间）
 
 ```python
-# Airis/render/adapter.py（Phase 5 新增）
+# Airia/render/adapter.py（Phase 5 新增）
 
 from enum import IntEnum
 from dataclasses import dataclass
@@ -420,7 +420,7 @@ def _build_damaged_parts(box: Any) -> np.ndarray:
 
 ### 2.3 主循环集成（MainWindow 持有全部）✅ 已实施
 
-`main.py` + `Airis/ui/main_window.py` 已按本数据流落地（含 recorder 装配、`set_unit_context`、
+`main.py` + `Airia/ui/main_window.py` 已按本数据流落地（含 recorder 装配、`set_unit_context`、
 面板回调 `_recent_events_for` / `_timeline_for` / `_generate_briefing`）。下方伪代码为设计参照：
 
 ```python
@@ -536,7 +536,7 @@ ambient_strength = 0.35
 ### 3.3 ThemeManager 设计 ✅（已实施）
 
 ```python
-# Airis/render/theme.py（新增）
+# Airia/render/theme.py（新增）
 
 class ThemeManager:
     """着色器主题管理器：加载/切换/卸载。"""
@@ -624,19 +624,19 @@ class Theme:
 
 | 新文件 | 职责 | 状态 |
 |--------|------|------|
-| `Airis/render/adapter.py` | WorldAdapter 渲染数据源抽象（Phase 5 透传 Real，Phase 8 切换 Twin；含部位损坏聚合 + 后勤视图 + 命名/聚合查询 + armor_speed 速度视图） | ✅ 5a+5b+5e |
-| `Airis/render/picking.py` | 屏幕坐标 → 单位拾取（hover/click 判定，O(N) 屏幕距离最近） | ✅ 5c |
-| `Airis/ui/main_window.py` | **重构**：完整的主窗口布局 + 快捷键事件过滤器 + 手动暂停 + 速度估计 + 特效喂入 | ✅ 5a+5b+5e |
-| `Airis/ui/narrative_overlay.py` | 对话面板（SidePanel Tab1；历史跨 Tab/结束后保留） | ✅ 5b+5e |
-| `Airis/ui/detail_panel.py` | 单位详情面板（SidePanel Tab4，**三级信息详细度**；级别 2 真实速度） | ✅ 5b+5e |
-| `Airis/ui/archive_panel.py` | 档案库骨架（SidePanel Tab2） | ✅ 5b 骨架 |
-| `Airis/ui/briefing_panel.py` | 战斗简报面板（SidePanel Tab3） | ✅ 5b 骨架 |
-| `Airis/render/theme.py` | ThemeManager + Theme | ✅ 5a |
-| `Airis/render/hud/overlay.py` | moderngl HUD 渲染（圆点标记 + 选中高亮 + 圆环模式 + 线段 + 文字） | ✅ 5c+5e |
-| `Airis/render/hud/text.py` | **新增（5e）**：FontAtlas（PIL 字体图集）+ TextRenderer（实例化字符 quad） | ✅ 5e |
-| `Airis/render/effects.py` | **新增（5e）**：EffectLayer 战场特效事件缓冲（弹道线/命中标记，纯逻辑可单测） | ✅ 5e |
-| `Airis/render/hud/log_widget.py` | Qt 透明滚动日志（左下角叠加） | ✅ 5c |
-| `Airis/ui/controls.py` | **新增（5e）**：ControlMap 键盘 → 动作映射（叙事/命令队列快捷键） | ✅ 5e |
+| `Airia/render/adapter.py` | WorldAdapter 渲染数据源抽象（Phase 5 透传 Real，Phase 8 切换 Twin；含部位损坏聚合 + 后勤视图 + 命名/聚合查询 + armor_speed 速度视图） | ✅ 5a+5b+5e |
+| `Airia/render/picking.py` | 屏幕坐标 → 单位拾取（hover/click 判定，O(N) 屏幕距离最近） | ✅ 5c |
+| `Airia/ui/main_window.py` | **重构**：完整的主窗口布局 + 快捷键事件过滤器 + 手动暂停 + 速度估计 + 特效喂入 | ✅ 5a+5b+5e |
+| `Airia/ui/narrative_overlay.py` | 对话面板（SidePanel Tab1；历史跨 Tab/结束后保留） | ✅ 5b+5e |
+| `Airia/ui/detail_panel.py` | 单位详情面板（SidePanel Tab4，**三级信息详细度**；级别 2 真实速度） | ✅ 5b+5e |
+| `Airia/ui/archive_panel.py` | 档案库骨架（SidePanel Tab2） | ✅ 5b 骨架 |
+| `Airia/ui/briefing_panel.py` | 战斗简报面板（SidePanel Tab3） | ✅ 5b 骨架 |
+| `Airia/render/theme.py` | ThemeManager + Theme | ✅ 5a |
+| `Airia/render/hud/overlay.py` | moderngl HUD 渲染（圆点标记 + 选中高亮 + 圆环模式 + 线段 + 文字） | ✅ 5c+5e |
+| `Airia/render/hud/text.py` | **新增（5e）**：FontAtlas（PIL 字体图集）+ TextRenderer（实例化字符 quad） | ✅ 5e |
+| `Airia/render/effects.py` | **新增（5e）**：EffectLayer 战场特效事件缓冲（弹道线/命中标记，纯逻辑可单测） | ✅ 5e |
+| `Airia/render/hud/log_widget.py` | Qt 透明滚动日志（左下角叠加） | ✅ 5c |
+| `Airia/ui/controls.py` | **新增（5e）**：ControlMap 键盘 → 动作映射（叙事/命令队列快捷键） | ✅ 5e |
 
 ### 4.2 NarrativeOverlay（对话面板）✅ 已实施
 
@@ -789,23 +789,23 @@ class Theme:
 | 文件 | 改动 |
 |------|------|
 | `main.py` | 集成 SimulationLoop + NarrativeEngine + ThemeManager；组装 MainWindow |
-| `Airis/ui/main_window.py` | **重度重构**：QSplitter 布局 + MenuBar + 信号槽连接 |
-| `Airis/render/gl_widget.py` | **外提着色器**：VERTEX_SHADER/FRAGMENT_SHADER 常量 → `assets/shaders/default/`；接收外部 program（ThemeManager 注入）；通过 WorldAdapter 读取渲染数据；增加 HUD pass |
-| `Airis/render/__init__.py` | 导出 ThemeManager + WorldAdapter |
+| `Airia/ui/main_window.py` | **重度重构**：QSplitter 布局 + MenuBar + 信号槽连接 |
+| `Airia/render/gl_widget.py` | **外提着色器**：VERTEX_SHADER/FRAGMENT_SHADER 常量 → `assets/shaders/default/`；接收外部 program（ThemeManager 注入）；通过 WorldAdapter 读取渲染数据；增加 HUD pass |
+| `Airia/render/__init__.py` | 导出 ThemeManager + WorldAdapter |
 
 ### 5.2 新增文件
 
 | 文件 | 行数估算 |
 |------|---------|
-| `Airis/render/adapter.py` | ~150 行 |
-| `Airis/render/picking.py` | ~120 行 |
-| `Airis/ui/narrative_overlay.py` | ~200 行 |
-| `Airis/ui/detail_panel.py` | ~200 行 |
-| `Airis/ui/archive_panel.py` | ~80 行（骨架） |
-| `Airis/ui/briefing_panel.py` | ~120 行（骨架） |
-| `Airis/render/theme.py` | ~180 行 |
-| `Airis/render/hud/overlay.py` | ~250 行 |
-| `Airis/render/hud/log_widget.py` | ~100 行 |
+| `Airia/render/adapter.py` | ~150 行 |
+| `Airia/render/picking.py` | ~120 行 |
+| `Airia/ui/narrative_overlay.py` | ~200 行 |
+| `Airia/ui/detail_panel.py` | ~200 行 |
+| `Airia/ui/archive_panel.py` | ~80 行（骨架） |
+| `Airia/ui/briefing_panel.py` | ~120 行（骨架） |
+| `Airia/render/theme.py` | ~180 行 |
+| `Airia/render/hud/overlay.py` | ~250 行 |
+| `Airia/render/hud/log_widget.py` | ~100 行 |
 | `assets/shaders/default/terrain.vert` | ~20 行 |
 | `assets/shaders/default/terrain.frag` | ~35 行 |
 | `assets/shaders/default/theme.toml` | ~10 行 |
@@ -819,9 +819,9 @@ class Theme:
 
 ### 5.3 不移改的文件（Phase 5 不碰）
 
-- 所有 `Airis/lulilo/` 子包（Phase 0-3，稳定）
-- 所有 `Airis/narrative/` 模块（Phase 4，稳定）
-- `Airis/render/camera.py`（稳定）
+- 所有 `Airia/lulilo/` 子包（Phase 0-3，稳定）
+- 所有 `Airia/narrative/` 模块（Phase 4，稳定）
+- `Airia/render/camera.py`（稳定）
 - `tests/` 目录（Phase 5 结束后单独补 GUI 测试）
 
 ---
@@ -830,16 +830,16 @@ class Theme:
 
 ### 6.1 Phase 5a：WorldAdapter + 着色器外提 + 主题系统（最小破坏性）✅ 已完成（2026-08-13）
 
-1. **实现 `Airis/render/adapter.py`**：`WorldAdapter.from_snapshot()` 透传模式
+1. **实现 `Airia/render/adapter.py`**：`WorldAdapter.from_snapshot()` 透传模式
 2. 从 `gl_widget.py` 提取 VERTEX_SHADER / FRAGMENT_SHADER → `assets/shaders/default/`
-3. 实现 `Airis/render/theme.py`（ThemeManager + Theme）
+3. 实现 `Airia/render/theme.py`（ThemeManager + Theme）
 4. GLWidget 改为接收外部 program（构造注入），默认加载 default 主题
 5. GLWidget 改为通过 `WorldAdapter` 读取渲染数据（而非直接读 terrain + snapshot）
 6. 验证：`uv run python main.py` 渲染效果与改动前完全一致
 
 ### 6.2 Phase 5b：MainWindow 重构 + 面板布局 ✅ 已完成（2026-08-13）
 
-1. ✅ 重构 `Airis/ui/main_window.py`：QSplitter + SidePanel(QTabWidget) + MenuBar
+1. ✅ 重构 `Airia/ui/main_window.py`：QSplitter + SidePanel(QTabWidget) + MenuBar
 2. ✅ 实现 `NarrativeOverlay`（对话面板 Tab1）
 3. ✅ 实现 `DetailPanel`（单位详情 Tab4，**三级信息**：全局概况→悬浮→点击）
 4. ✅ 实现 `ArchivePanel`（档案库骨架 Tab2）
@@ -848,9 +848,9 @@ class Theme:
 
 ### 6.3 Phase 5c：HUD 叠加层 + 拾取交互 ✅ 已完成（2026-08-13）
 
-1. ✅ 实现 `Airis/render/hud/overlay.py`（moderngl 圆点标记 + 选中高亮；损坏部位/文字/弹道线/命中标记待补）
-2. ✅ 实现 `Airis/render/hud/log_widget.py`（Qt 透明日志）
-3. ✅ 实现 `Airis/render/picking.py`（屏幕坐标 → 单位拾取：hover/click 判定）
+1. ✅ 实现 `Airia/render/hud/overlay.py`（moderngl 圆点标记 + 选中高亮；损坏部位/文字/弹道线/命中标记待补）
+2. ✅ 实现 `Airia/render/hud/log_widget.py`（Qt 透明日志）
+3. ✅ 实现 `Airia/render/picking.py`（屏幕坐标 → 单位拾取：hover/click 判定）
 4. ✅ GLWidget 鼠标事件接入拾取（移动→hover、单击→选中、Esc→取消，拖拽阈值 4px）
 5. ✅ DetailPanel 接入 `unit_hovered` / `unit_selected` 信号，三级信息切换
 6. ✅ GLWidget 增加 HUD pass（投影→屏幕空间圆点，关闭深度测试）

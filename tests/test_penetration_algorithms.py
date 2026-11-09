@@ -20,7 +20,7 @@ import time
 import numpy as np
 import pytest
 
-from Airis.lulilo.combat.damage import (
+from Airia.lulilo.combat.damage import (
     ArmorType,
     DamageResolver,
     PenetrationModel,
@@ -33,12 +33,12 @@ from Airis.lulilo.combat.damage import (
     penetration_model_of,
     resolve_penetration_v2,
 )
-from Airis.lulilo.combat.engagement import FiringControl, UnitCombatConfig
-from Airis.lulilo.combat.weapons import AmmoType, WeaponRegistry, WeaponSystem
-from Airis.lulilo.entities.pools import ArmorPool, BoxPool, PartType, ProjectilePool
-from Airis.lulilo.logistics.ammo import AmmoManager
-from Airis.lulilo.logistics.fuel import FuelManager
-from Airis.lulilo.simulation.loop import EventBus
+from Airia.lulilo.combat.engagement import FiringControl, UnitCombatConfig
+from Airia.lulilo.combat.weapons import AmmoType, WeaponRegistry, WeaponSystem
+from Airia.lulilo.entities.pools import ArmorPool, BoxPool, PartType, ProjectilePool
+from Airia.lulilo.logistics.ammo import AmmoManager
+from Airia.lulilo.logistics.fuel import FuelManager
+from Airia.lulilo.simulation.loop import EventBus
 
 # M829A3 标定参数（Tate 1986：WHA BHN≈420 → Yp=1.7·σyp≈3.0GPa；RHA BHN≈350 → Rt≈7.4GPa）
 L_M829 = 780.0

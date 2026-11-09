@@ -16,22 +16,22 @@ import math
 import numpy as np
 import pytest
 
-from Airis.lulilo.combat.engagement import FiringControl, UnitCombatConfig
-from Airis.lulilo.core.rng import RNGManager
-from Airis.lulilo.entities.pools import (
+from Airia.lulilo.combat.engagement import FiringControl, UnitCombatConfig
+from Airia.lulilo.core.rng import RNGManager
+from Airia.lulilo.entities.pools import (
     ArmorPool,
     BoxPool,
     FormationAIPool,
     PartType,
     ProjectilePool,
 )
-from Airis.lulilo.entities.twin import (
+from Airia.lulilo.entities.twin import (
     TWIN_KIND_ARMOR,
     TwinPool,
     TwinStatus,
 )
-from Airis.lulilo.logistics.ammo import AmmoManager
-from Airis.lulilo.simulation.ai import (
+from Airia.lulilo.logistics.ammo import AmmoManager
+from Airia.lulilo.simulation.ai import (
     ArtilleryAI,
     Contact,
     FormationAI,
@@ -39,8 +39,8 @@ from Airis.lulilo.simulation.ai import (
     UnitRole,
     score_targets,
 )
-from Airis.lulilo.simulation.loop import EventBus, SimulationLoop
-from Airis.lulilo.simulation.state import SimulationState
+from Airia.lulilo.simulation.loop import EventBus, SimulationLoop
+from Airia.lulilo.simulation.state import SimulationState
 
 
 def _rig_formation_ai() -> tuple[FormationAI, ArmorPool, FormationAIPool, TwinPool, EventBus]:
@@ -129,8 +129,8 @@ class TestSupportRequestChain:
         events = EventBus()
         boxes = BoxPool(capacity=64)
         proj = ProjectilePool(capacity=32)
-        from Airis.lulilo.combat.weapons import WeaponSystem
-        from Airis.lulilo.combat.guidance import MissileControlRegistry
+        from Airia.lulilo.combat.weapons import WeaponSystem
+        from Airia.lulilo.combat.guidance import MissileControlRegistry
 
         fc = FiringControl(
             armor, boxes, proj,
@@ -204,8 +204,8 @@ class TestArtilleryAutoAccept:
         proj = ProjectilePool(capacity=32)
         events = EventBus()
         ammo = AmmoManager(capacity=16)
-        from Airis.lulilo.combat.weapons import WeaponSystem
-        from Airis.lulilo.combat.guidance import MissileControlRegistry
+        from Airia.lulilo.combat.weapons import WeaponSystem
+        from Airia.lulilo.combat.guidance import MissileControlRegistry
 
         fc = FiringControl(
             armor, boxes, proj,

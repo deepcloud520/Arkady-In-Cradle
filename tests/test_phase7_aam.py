@@ -11,14 +11,14 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from Airis.lulilo.combat.collision import detect_proj_aircraft_batch
-from Airis.lulilo.combat.engagement import FiringControl
-from Airis.lulilo.combat.guidance import (
+from Airia.lulilo.combat.collision import detect_proj_aircraft_batch
+from Airia.lulilo.combat.engagement import FiringControl
+from Airia.lulilo.combat.guidance import (
     GuidanceStage,
     MissileControlRegistry,
     control_glide_bomb,
 )
-from Airis.lulilo.combat.weapons import (
+from Airia.lulilo.combat.weapons import (
     AmmoConfig,
     AmmoType,
     GuidanceType,
@@ -28,17 +28,17 @@ from Airis.lulilo.combat.weapons import (
     WeaponRegistry,
     WeaponSystem,
 )
-from Airis.lulilo.core.rng import RNGManager
-from Airis.lulilo.entities.pools import (
+from Airia.lulilo.core.rng import RNGManager
+from Airia.lulilo.entities.pools import (
     AircraftPool,
     ArmorPool,
     BoxPool,
     EmitterPool,
     ProjectilePool,
 )
-from Airis.lulilo.movement.integrate import integrate_guided_projectile_movement
-from Airis.lulilo.simulation.commands import CommandQueue
-from Airis.lulilo.simulation.state import SimulationState
+from Airia.lulilo.movement.integrate import integrate_guided_projectile_movement
+from Airia.lulilo.simulation.commands import CommandQueue
+from Airia.lulilo.simulation.state import SimulationState
 
 
 def _air_registry() -> WeaponRegistry:
@@ -175,7 +175,7 @@ class TestGuidTargetVelCompat:
         p.guid_stage[i] = int(GuidanceStage.TERMINAL)
         p.guid_target_pos[i] = (1000, 0, 0)
         p.guid_nav_gain[i] = 2.0
-        from Airis.lulilo.combat.guidance import control_glide_bomb
+        from Airia.lulilo.combat.guidance import control_glide_bomb
 
         pos0 = p.pos[i].copy()
         vel0 = p.vel[i].copy()
@@ -233,7 +233,7 @@ class TestProxFuse:
     """近炸引信：AAM 接近飞机 → 起爆 → 飞机掉血。"""
 
     def test_prox_detonates(self) -> None:
-        from Airis.lulilo.combat.damage_submission import DamageSubmissionPool
+        from Airia.lulilo.combat.damage_submission import DamageSubmissionPool
 
         fc, aircraft, armor, projectiles, boxes, emitters = _rig()
         fc.damage_pool = DamageSubmissionPool(capacity=16)
@@ -262,7 +262,7 @@ class TestAamEndToEnd:
         横切目标（目标速度⊥视线）需极大横向过载，40g 下转弯半径 ~4.7km，
         66m 处物理上擦过——真实兵棋中横切亦低命中，故端到端用迎头。
         """
-        from Airis.lulilo.combat.damage_submission import DamageSubmissionPool
+        from Airia.lulilo.combat.damage_submission import DamageSubmissionPool
 
         fc, aircraft, armor, projectiles, boxes, emitters = _rig()
         fc.damage_pool = DamageSubmissionPool(capacity=64)
@@ -289,7 +289,7 @@ class TestAamEndToEnd:
     def test_aam_crossing_requires_lead(self) -> None:
         """横切目标：AAM 追踪目标速度（guid_target_vel 前置量）——验证弹丸
         末段确实朝目标前方飞行（比无前置量更接近）。"""
-        from Airis.lulilo.combat.damage_submission import DamageSubmissionPool
+        from Airia.lulilo.combat.damage_submission import DamageSubmissionPool
 
         fc, aircraft, armor, projectiles, boxes, emitters = _rig()
         fc.damage_pool = DamageSubmissionPool(capacity=64)
@@ -326,7 +326,7 @@ class TestDirectAirHit:
     """弹丸直接命中飞机机身箱（detect_proj_aircraft_batch 接入）。"""
 
     def test_direct_hit_damages(self) -> None:
-        from Airis.lulilo.combat.damage_submission import DamageSubmissionPool
+        from Airia.lulilo.combat.damage_submission import DamageSubmissionPool
 
         fc, aircraft, armor, projectiles, boxes, emitters = _rig()
         fc.damage_pool = DamageSubmissionPool(capacity=16)

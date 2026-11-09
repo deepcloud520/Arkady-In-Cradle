@@ -151,7 +151,7 @@ def spawn(self, x, y, z, *, side=Side.NATO, role=0, formation_id=-1, ...):
 > `ProjectilePool` 的 guid 字段有同款遗留，未动）。
 
 > `role` / `side` 此前在渲染层以动态属性 `side` 演示（dev-progress 2026-08-13），
-> 本阶段**正式下沉为 SoA 字段**；`Airis/render/adapter.py` 的 `WorldAdapter` 改读 `armor.side`
+> 本阶段**正式下沉为 SoA 字段**；`Airia/render/adapter.py` 的 `WorldAdapter` 改读 `armor.side`
 > （`getattr` 防御保留）。2026-08-15 改名：`team`（相对友/敌/中立）→ `side`（绝对阵营），
 > 敌友中立由 `entities/side.py` 派生。
 
@@ -799,7 +799,7 @@ RWR 是 **ESM 家族的被动接收器**，语义 = 「我被敌方雷达照射/
 
 ### 12.1 测试场景（⚠️ Phase 10 前不新增地图）
 
-> 用户拍板（2026-08-14）：**Airis 引擎完全开发完（Phase 10）之前不新增地图**，测试场景一律
+> 用户拍板（2026-08-14）：**Airia 引擎完全开发完（Phase 10）之前不新增地图**，测试场景一律
 > 复用 `tests/terrain_factory.py` 的现有地图（`flat`/`fbm`/`default`），或作为**纯测试地图**维护。
 
 | 测试场景 | 敌我编队 | 地形（复用 factory） | 验证目标 |
@@ -871,18 +871,18 @@ flowchart LR
 
 | 文件 | 动作 | 内容 |
 |---|---|---|
-| `Airis/lulilo/simulation/ai.py` | 新建 | 编队 AI + 单位 AI + 支援 + RWR + 通信簇（单一模块） |
-| `Airis/lulilo/simulation/scenario.py` | 新建 | ScenarioConfig + 场景装配器 |
-| `Airis/lulilo/combat/damage_submission.py` | 新建 | DamageSubmissionPool + resolve_damage_events 内核 |
-| `Airis/lulilo/entities/pools.py` | 修改 | ArmorPool 8 字段 + FormationAIPool |
-| `Airis/lulilo/combat/weapons.py` | 修改 | AmmoType 4 值 + AmmoConfig 字段 |
-| `Airis/lulilo/combat/guidance.py` | 修改 | LOITER=5 + top_attack/loiter_attack 回调（④⑧ 延后） |
-| `Airis/lulilo/combat/engagement.py` | 修改 | _kind_of 扩展 + 攻顶公共化 + 毁伤提交改造 |
-| `Airis/lulilo/combat/damage.py` | 修改 | 爆炸/破片分支 → 提交池 |
-| `Airis/lulilo/simulation/loop.py` | 修改 | 调度链插入 ai |
-| `Airis/lulilo/simulation/state.py` | 修改 | formation_pool/damage_pool |
-| `Airis/lulilo/simulation/serialization.py` | 修改 | 新字段序列化（`if name in data` 兼容） |
-| `Airis/render/adapter.py` | 修改 | WorldAdapter 改读 armor.team |
+| `Airia/lulilo/simulation/ai.py` | 新建 | 编队 AI + 单位 AI + 支援 + RWR + 通信簇（单一模块） |
+| `Airia/lulilo/simulation/scenario.py` | 新建 | ScenarioConfig + 场景装配器 |
+| `Airia/lulilo/combat/damage_submission.py` | 新建 | DamageSubmissionPool + resolve_damage_events 内核 |
+| `Airia/lulilo/entities/pools.py` | 修改 | ArmorPool 8 字段 + FormationAIPool |
+| `Airia/lulilo/combat/weapons.py` | 修改 | AmmoType 4 值 + AmmoConfig 字段 |
+| `Airia/lulilo/combat/guidance.py` | 修改 | LOITER=5 + top_attack/loiter_attack 回调（④⑧ 延后） |
+| `Airia/lulilo/combat/engagement.py` | 修改 | _kind_of 扩展 + 攻顶公共化 + 毁伤提交改造 |
+| `Airia/lulilo/combat/damage.py` | 修改 | 爆炸/破片分支 → 提交池 |
+| `Airia/lulilo/simulation/loop.py` | 修改 | 调度链插入 ai |
+| `Airia/lulilo/simulation/state.py` | 修改 | formation_pool/damage_pool |
+| `Airia/lulilo/simulation/serialization.py` | 修改 | 新字段序列化（`if name in data` 兼容） |
+| `Airia/render/adapter.py` | 修改 | WorldAdapter 改读 armor.team |
 
 ---
 

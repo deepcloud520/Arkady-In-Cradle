@@ -11,12 +11,12 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from Airis.lulilo.combat.damage_submission import (
+from Airia.lulilo.combat.damage_submission import (
     DamageKind,
     DamageSubmissionPool,
     resolve_aircraft_area_damage,
 )
-from Airis.lulilo.entities.pools import (
+from Airia.lulilo.entities.pools import (
     AircraftPool,
     AircraftState,
     ArmorPool,
@@ -39,12 +39,12 @@ class TestAircraftDamage:
     """直接命中毁伤（docs §7.4 ①）。"""
 
     def test_direct_hit_reduces_health(self) -> None:
-        from Airis.lulilo.combat.engagement import FiringControl
+        from Airia.lulilo.combat.engagement import FiringControl
 
         from tests.test_phase7_aam import _air_registry, _rig
-        from Airis.lulilo.combat.weapons import WeaponSystem
-        from Airis.lulilo.combat.guidance import MissileControlRegistry
-        from Airis.lulilo.core.rng import RNGManager
+        from Airia.lulilo.combat.weapons import WeaponSystem
+        from Airia.lulilo.combat.guidance import MissileControlRegistry
+        from Airia.lulilo.core.rng import RNGManager
 
         aircraft, armor, boxes, emitters, proj = _rig_aircraft()
         fc = FiringControl(
@@ -96,12 +96,12 @@ class TestCrashChain:
     """坠毁链：CRASHING → 触地 → 爆炸 → 残骸（docs §7.4）。"""
 
     def test_zero_health_transitions_to_crashing(self) -> None:
-        from Airis.lulilo.combat.engagement import FiringControl
+        from Airia.lulilo.combat.engagement import FiringControl
 
         from tests.test_phase7_aam import _air_registry
-        from Airis.lulilo.combat.weapons import WeaponSystem
-        from Airis.lulilo.combat.guidance import MissileControlRegistry
-        from Airis.lulilo.core.rng import RNGManager
+        from Airia.lulilo.combat.weapons import WeaponSystem
+        from Airia.lulilo.combat.guidance import MissileControlRegistry
+        from Airia.lulilo.core.rng import RNGManager
 
         aircraft, armor, boxes, emitters, proj = _rig_aircraft()
         fc = FiringControl(
@@ -127,12 +127,12 @@ class TestCrashChain:
 
     def test_crashing_aircraft_ignored_as_target(self) -> None:
         """坠毁机从目标剔除（_find_nearest_air_target 过滤）。"""
-        from Airis.lulilo.combat.engagement import FiringControl
+        from Airia.lulilo.combat.engagement import FiringControl
 
         from tests.test_phase7_aam import _air_registry
-        from Airis.lulilo.combat.weapons import WeaponSystem
-        from Airis.lulilo.combat.guidance import MissileControlRegistry
-        from Airis.lulilo.core.rng import RNGManager
+        from Airia.lulilo.combat.weapons import WeaponSystem
+        from Airia.lulilo.combat.guidance import MissileControlRegistry
+        from Airia.lulilo.core.rng import RNGManager
 
         aircraft, armor, boxes, emitters, proj = _rig_aircraft()
         fc = FiringControl(
@@ -150,12 +150,12 @@ class TestCrashChain:
         assert fc._find_nearest_air_target(ref, 1000.0) == -1
 
     def test_crash_impact_submits_explosion_and_removes(self) -> None:
-        from Airis.lulilo.combat.engagement import FiringControl
+        from Airia.lulilo.combat.engagement import FiringControl
 
         from tests.test_phase7_aam import _air_registry
-        from Airis.lulilo.combat.weapons import WeaponSystem
-        from Airis.lulilo.combat.guidance import MissileControlRegistry
-        from Airis.lulilo.core.rng import RNGManager
+        from Airia.lulilo.combat.weapons import WeaponSystem
+        from Airia.lulilo.combat.guidance import MissileControlRegistry
+        from Airia.lulilo.core.rng import RNGManager
 
         aircraft, armor, boxes, emitters, proj = _rig_aircraft()
         pool = DamageSubmissionPool(capacity=16)
@@ -179,12 +179,12 @@ class TestCrashChain:
 
     def test_crashing_air_still_falling_ignored(self) -> None:
         """还在空中下坠（未触地）→ 不销毁。"""
-        from Airis.lulilo.combat.engagement import FiringControl
+        from Airia.lulilo.combat.engagement import FiringControl
 
         from tests.test_phase7_aam import _air_registry
-        from Airis.lulilo.combat.weapons import WeaponSystem
-        from Airis.lulilo.combat.guidance import MissileControlRegistry
-        from Airis.lulilo.core.rng import RNGManager
+        from Airia.lulilo.combat.weapons import WeaponSystem
+        from Airia.lulilo.combat.guidance import MissileControlRegistry
+        from Airia.lulilo.core.rng import RNGManager
 
         aircraft, armor, boxes, emitters, proj = _rig_aircraft()
         fc = FiringControl(
@@ -250,12 +250,12 @@ class TestProxFuseNearbyAircraft:
     """近炸对邻近飞机区域毁伤（多机在场）。"""
 
     def test_blast_damages_nearby_aircraft(self) -> None:
-        from Airis.lulilo.combat.engagement import FiringControl
+        from Airia.lulilo.combat.engagement import FiringControl
 
         from tests.test_phase7_aam import _air_registry, _rig
-        from Airis.lulilo.combat.weapons import WeaponSystem
-        from Airis.lulilo.combat.guidance import MissileControlRegistry
-        from Airis.lulilo.core.rng import RNGManager
+        from Airia.lulilo.combat.weapons import WeaponSystem
+        from Airia.lulilo.combat.guidance import MissileControlRegistry
+        from Airia.lulilo.core.rng import RNGManager
 
         aircraft, armor, boxes, emitters, proj = _rig_aircraft()
         fc = FiringControl(

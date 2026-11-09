@@ -4,8 +4,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
-from Airis.lulilo.navmesh._baker import Baker
-from Airis.lulilo.navmesh._tiles import TileManager
+from Airia.lulilo.navmesh._baker import Baker
+from Airia.lulilo.navmesh._tiles import TileManager
 from tests.terrain_factory import TerrainFactory, TerrainFactoryConfig
 
 cfg = TerrainFactoryConfig(

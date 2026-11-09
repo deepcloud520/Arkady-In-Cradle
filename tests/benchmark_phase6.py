@@ -15,25 +15,25 @@ import time
 
 import numpy as np
 
-from Airis.lulilo.combat.damage_submission import DamageKind, DamageSubmissionPool, resolve_area_damage
-from Airis.lulilo.combat.engagement import FiringControl, UnitCombatConfig
-from Airis.lulilo.core.rng import RNGManager
-from Airis.lulilo.entities.pools import (
+from Airia.lulilo.combat.damage_submission import DamageKind, DamageSubmissionPool, resolve_area_damage
+from Airia.lulilo.combat.engagement import FiringControl, UnitCombatConfig
+from Airia.lulilo.core.rng import RNGManager
+from Airia.lulilo.entities.pools import (
     ArmorPool,
     BoxPool,
     FormationAIPool,
     PartType,
     ProjectilePool,
 )
-from Airis.lulilo.logistics.ammo import AmmoManager
-from Airis.lulilo.simulation.ai import (
+from Airia.lulilo.logistics.ammo import AmmoManager
+from Airia.lulilo.simulation.ai import (
     ArtilleryAI,
     CommunicationNetwork,
     FormationAI,
     MuzzleFlashLog,
     UnitRole,
 )
-from Airis.lulilo.simulation.loop import EventBus, SimulationLoop
+from Airia.lulilo.simulation.loop import EventBus, SimulationLoop
 
 _SIMPLE_PARTS = [
     (PartType.HULL, 1.5, 3.0, 1.0, 0.0, 0.0, 0.0),

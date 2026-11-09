@@ -13,21 +13,22 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+import yaml
 
-from Airis.lulilo.simulation.commands import Command, CommandQueue, CommandType
-from Airis.lulilo.simulation.loop import SimulationEvent
-from Airis.lulilo.simulation.state import SimulationSnapshot
+from Airia.lulilo.simulation.commands import Command, CommandQueue, CommandType
+from Airia.lulilo.simulation.loop import SimulationEvent
+from Airia.lulilo.simulation.state import SimulationSnapshot
 
-from Airis.narrative.commands import CommandFactory
-from Airis.narrative.dialogue import DialogueEngine, DialogueTreeConfig
-from Airis.narrative.engine import NarrativeEngine
-from Airis.narrative.recorder import (
+from Airia.narrative.commands import CommandFactory
+from Airia.narrative.dialogue import DialogueEngine, DialogueTreeConfig
+from Airia.narrative.engine import NarrativeEngine
+from Airia.narrative.recorder import (
     BriefingGenerator,
     CombatEventRecorder,
     CombatEventRecord,
     RingBuffer,
 )
-from Airis.narrative.triggers import (
+from Airia.narrative.triggers import (
     ConditionEvaluator,
     TriggerAction,
     TriggerCondition,
@@ -126,6 +127,11 @@ triggers:
 """
 
 
+def _tree_from_yaml(text: str) -> DialogueTreeConfig:
+    """YAML 字符串 → DialogueTreeConfig（免临时文件，沙箱环境可跑）。"""
+    return DialogueTreeConfig.model_validate(yaml.safe_load(text))
+
+
 # ---------------------------------------------------------------------------
 # dialogue.py
 # ---------------------------------------------------------------------------
@@ -142,26 +148,29 @@ class TestDialogueEngine:
         assert len(tree.nodes) == 4
         assert eng.has("prologue_001")
 
-    def test_activate_text_then_choice(self, tmp_path: Path) -> None:
-        f = tmp_path / "p.yaml"
-        f.write_text(PROLOGUE_YAML, encoding="utf-8")
+    def test_activate_text_then_choice(self) -> None:
         eng = DialogueEngine()
-        eng.load(f)
+        eng.register(_tree_from_yaml(PROLOGUE_YAML))
 
         st = eng.activate("prologue_001")
         assert st.speaker == "系统"
         assert not st.is_finished
 
-        # 自动前进到 choice 节点
+        # 自动前进到 choice 节点（无 flags → 条件选项「等情报」不可见）
         st2 = eng.advance(None)
         assert st2.speaker == "指挥官"
-        assert st2.options == ["固守", "出击", "等情报"]
+        assert st2.options == ["固守", "出击"]
+        assert st2.option_indices == [0, 1]
 
-    def test_choice_advance_with_action(self, tmp_path: Path) -> None:
-        f = tmp_path / "p.yaml"
-        f.write_text(PROLOGUE_YAML, encoding="utf-8")
+        # 有 has_scout 标志 → 第三个条件选项可见
+        eng.activate("prologue_001")
+        st3 = eng.advance(None, {"flags": {"has_scout"}})
+        assert st3.options == ["固守", "出击", "等情报"]
+        assert st3.option_indices == [0, 1, 2]
+
+    def test_choice_advance_with_action(self) -> None:
         eng = DialogueEngine()
-        eng.load(f)
+        eng.register(_tree_from_yaml(PROLOGUE_YAML))
         eng.activate("prologue_001")
         eng.advance(None)  # → choice
 
@@ -176,11 +185,9 @@ class TestDialogueEngine:
         st2 = eng.advance(None, ctx)
         assert st2.is_finished
 
-    def test_branch_node(self, tmp_path: Path) -> None:
-        f = tmp_path / "b.yaml"
-        f.write_text(BRANCH_YAML, encoding="utf-8")
+    def test_branch_node(self) -> None:
         eng = DialogueEngine()
-        eng.load(f)
+        eng.register(_tree_from_yaml(BRANCH_YAML))
 
         # 无 scout 标志 → blind
         eng.activate("branch_001")
@@ -192,15 +199,70 @@ class TestDialogueEngine:
         st2 = eng.advance(None, {"flags": {"scout"}})
         assert st2.text == "有侦察。"
 
-    def test_condition_option_visibility(self, tmp_path: Path) -> None:
-        """条件选项：只有满足条件才显示。"""
-        f = tmp_path / "p.yaml"
-        f.write_text(PROLOGUE_YAML, encoding="utf-8")
+    def test_condition_option_visibility(self) -> None:
+        """条件选项：只有满足条件才显示（docs §2.3）。
+
+        2026-09-11 起由**引擎**过滤（原骨架期把过滤推给 UI，但 UI 拿不到
+        eval_ctx/flags，实际等于不过滤 —— 见 docs/story-architecture-review.md §三.2）。
+
+        用 `DialogueEngine.register()` 内存构造：免临时文件（沙箱可跑）。
+        """
         eng = DialogueEngine()
-        eng.load(f)
+        eng.register(_tree_from_yaml(PROLOGUE_YAML))
+
+        # 无 flags → 条件选项隐藏
         eng.activate("prologue_001")
-        st = eng.advance(None)  # → choice
-        assert "等情报" in st.options  # 骨架期：条件选项始终列出（过滤逻辑由 UI 处理）
+        st = eng.advance(None)
+        assert "等情报" not in st.options
+        assert st.options == ["固守", "出击"]
+        assert st.option_indices == [0, 1]
+
+        # 有 flags → 条件选项显示
+        eng.activate("prologue_001")
+        st2 = eng.advance(None, {"flags": {"has_scout"}})
+        assert "等情报" in st2.options
+        assert st2.option_indices == [0, 1, 2]
+
+    def test_visible_index_maps_to_original_option(self) -> None:
+        """回归：隐藏中间选项后，可见索引必须映射回原始索引。
+
+        docs/架构评审报告.md §十 建议 10 明确警告：过滤后不保留映射会「选错分支」。
+        """
+        eng = DialogueEngine()
+        eng.register(_tree_from_yaml("""
+dialogue_id: "mapping"
+nodes:
+  - id: start
+    type: choice
+    speaker: "指挥官"
+    text: "选？"
+    options:
+      - text: "A"
+        next: node_a
+      - text: "B(条件)"
+        next: node_b
+        condition: "flags.contains('unlock_b')"
+      - text: "C"
+        next: node_c
+  - id: node_a
+    type: text
+    text: "走了 A"
+  - id: node_b
+    type: text
+    text: "走了 B"
+  - id: node_c
+    type: text
+    text: "走了 C"
+"""))
+
+        # 无 unlock_b → 可见列表 = [A, C]
+        st = eng.activate("mapping", {"flags": set()})
+        assert st.options == ["A", "C"]
+        assert st.option_indices == [0, 2]
+
+        # 选「可见索引 1」应到 C（原始索引 2）；若丢掉映射会错走 B
+        st2 = eng.advance(1, {"flags": set()})
+        assert st2.text == "走了 C"
 
     def test_invalid_next_reference(self, tmp_path: Path) -> None:
         yaml = """
@@ -568,7 +630,7 @@ class TestNarrativeEngine:
         eng._activate_dialogue("prologue_001", pause_sim=True)
         # 手动推进：tick 里不自动推进，这里调用 on_player_choice(None) 不适用。
         # 改用 DialogueEngine 直接驱动：
-        from Airis.narrative.dialogue import DialogueEngine as DE
+        from Airia.narrative.dialogue import DialogueEngine as DE
 
         de = DE()
         de.load(tmp_path / "p.yaml")

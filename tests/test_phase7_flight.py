@@ -13,7 +13,7 @@ import math
 import numpy as np
 import pytest
 
-from Airis.lulilo.entities.pools import (
+from Airia.lulilo.entities.pools import (
     AircraftPool,
     AircraftState,
     ArmorPool,
@@ -21,8 +21,8 @@ from Airis.lulilo.entities.pools import (
     EmitterPool,
     ProjectilePool,
 )
-from Airis.lulilo.movement.aerodynamics import AircraftAero
-from Airis.lulilo.movement.flight_control import (
+from Airia.lulilo.movement.aerodynamics import AircraftAero
+from Airia.lulilo.movement.flight_control import (
     FlightControl,
     build_air_movement_hook,
 )
@@ -42,7 +42,7 @@ def _run(pool: AircraftPool, aero: AircraftAero, flight: FlightControl,
     stall = np.zeros(pool.capacity, np.bool_)
     for _ in range(steps):
         flight.tick(pool, dt)
-        from Airis.lulilo.movement.aerodynamics import integrate_aircraft_motion
+        from Airia.lulilo.movement.aerodynamics import integrate_aircraft_motion
 
         integrate_aircraft_motion(
             pool.pos, pool.vel, pool.heading, pool.pitch, pool.bank,

@@ -52,7 +52,7 @@
 
 ## 2026-08-17（同日补充）main.py 演示调用链：装甲部队交战
 
-- `Airis/ui/main_window.py::_create_simulation` 从「移动+悬挂演示」升级为**完整装甲交战**：
+- `Airia/ui/main_window.py::_create_simulation` 从「移动+悬挂演示」升级为**完整装甲交战**：
   - 装配 `FiringControl`（内置 M256/2A46M 主炮 + 弹药 + 伤害提交池 + EmitterPool）
     + `FormationAI`（编队 AI，默认全知接触）+ `FormationAIPool`；
   - 两队坦克编队（北约 M256 / 华约 2A46M）每车 `set_unit_config` + 编队意图
@@ -69,10 +69,10 @@
 > 全部挂载：movement / air_movement / ai / air_ai / combat）。
 
 ### 改动文件
-- `Airis/render/gl_widget.py::_default_terrain`：256×256 → **320×320**（世界 640×640m，
+- `Airia/render/gl_widget.py::_default_terrain`：256×256 → **320×320**（世界 640×640m，
   长桥延长到 240 格；普通桥位置适配；DualContour 构建约 6~7s 加载期一次）；
   `_render_hud_inner` 加 **2.5) 空中单位标记**（阵营色小圆点，读 adapter.aircraft_*）
-- `Airis/ui/main_window.py::_create_simulation`：
+- `Airia/ui/main_window.py::_create_simulation`：
   - **地面**：北约 M1A2 / 华约 T-14 机炮车编队（16×2）相向推进到长桥两端接敌
     （布局从 (60,60)/(196,196) 散开到 (100,100)/(540,540)，目标 (200,258)/(440,258)）；
   - **炮兵**：双方 4 门 M109 155mm 后置炮位（角落 (70,570)/(570,70)），
@@ -88,7 +88,7 @@
     静止无路标点，`FormationAI` 跳过炮兵成员直射）；
   - `ai` hook 组合：坦克 `FormationAI.tick` + `flashes.tick`（单点时钟）+
     `ArtilleryAI.tick`×2；`air_movement`（0.1s）/`air_ai`（1s）挂载
-- `Airis/render/adapter.py`：`WorldAdapter` 加 **aircraft 视图**
+- `Airia/render/adapter.py`：`WorldAdapter` 加 **aircraft 视图**
   （aircraft_pos/active/side；`_aircraft_arrays()` 未装配→空数组），
   `from_snapshot` / `from_snapshot_twin` 填充
 - `main.py`：相机 distance 260→380 俯瞰全战场
@@ -104,8 +104,14 @@
 - `tests/output/` 下 11 个 pytest 残留临时目录（.pytest-basetemp / pytest-tmp-* 等）
   ACL 被锁无法删除（Get-Acl UnauthorizedAccess）→ `smoke_gui` 的 clean_output_dir
   与 pytest 的 tmp_path 收集会 PermissionError（pyproject.toml 已有注释记录）；
-  全量回归 680 passed / 2 failed / 15 errors 中，failed（narrative 集成，story 数据
-  pause=False）与 errors（PermissionError）均为环境/工作区既有状态，与本次改动无关
+  全量回归 680 passed / 2 failed / 15 errors 中，errors（PermissionError）为环境/工作区
+  既有状态，与本次改动无关。
+- ⚠️ **归因更正（2026-09-11）**：上述 2 failed **不是环境问题**——
+  `story/triggers/chapter1.yaml` 三条触发器原为 `pause_sim: false`，而
+  `TriggerAction.pause_sim` 默认 `True`（`triggers.py:235`）、
+  `tests/test_narrative_integration.py:83` 断言 `is_paused` 为真 →
+  **是 story 示例数据与引擎暂停契约不一致**。已于 2026-09-11 对齐
+  （battle_start / first_blood → `true`，时间警告 → `false`）。
 
 ## 2026-08-18（同日补充）演示地图切换：15km×15km 扁平地图（Phase 9 最小尺寸）
 
@@ -113,13 +119,13 @@
 > 三军演示照常。管线零结构改动，仅两处**装配参数适配地图尺寸**（见下）。
 
 ### 改动文件
-- `Airis/render/gl_widget.py::_default_terrain`：320×320（640m）→ **400×400 格 × 37.5m =
+- `Airia/render/gl_widget.py::_default_terrain`：320×320（640m）→ **400×400 格 × 37.5m =
   15km×15km 扁平**（amplitude=0，无桥/峡谷；WorldMesh ~19s / NavGraph ~1.1s 加载期一次；
   `surface_z` 全平 0）
-- `Airis/ui/main_window.py`：兵力布局收拢到地图中心（坦克 7350/7550 相向接敌，间距
+- `Airia/ui/main_window.py`：兵力布局收拢到地图中心（坦克 7350/7550 相向接敌，间距
   155~410m；炮兵 7150,7900 / 7850,7100；空军 7000/8000,7500）；
   `FiringControl` 加 `detector=CollisionDetector(world_half=8000.0)`
-- `Airis/lulilo/combat/engagement.py`：`WORLD_BOUND` 5000 → **12000**（弹丸回收边界随
+- `Airia/lulilo/combat/engagement.py`：`WORLD_BOUND` 5000 → **12000**（弹丸回收边界随
   地图放大；曲射弹丸仍豁免出界回收）
 - `main.py`：相机 distance 9500 俯瞰全图（far=12000 覆盖）
 

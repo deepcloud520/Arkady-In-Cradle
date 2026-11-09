@@ -15,6 +15,10 @@
 > Phase D 落地（`terrain/surface.py::WorldMeshRenderer`）：
 > - 渲染数据源统一为 WorldMesh（DualContour 完整 3D），不再从 Heightfield 独立提取
 > - 地面平滑细分 + 结构（顶/底/侧）patch 三角化 → 桥侧墙/桥底进入渲染
+>
+> ⚠️ **执行条款（2026-11-03）**：本文件 §1「放弃 2.5D 高度图思维」的强制约束见
+> **`docs/worldmesh-ground-patch-policy.md`**——地面必须保留显式 `WorldPatch`，
+> 禁止「地面不入面片集合 / 直接查高度场」的退化方案（冲突时以该文件为准）。
 
 ## 一、动机
 

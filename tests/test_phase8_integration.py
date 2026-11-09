@@ -14,24 +14,24 @@ import math
 import numpy as np
 import pytest
 
-from Airis.lulilo.combat.damage_submission import DamageSubmissionPool
-from Airis.lulilo.combat.engagement import FiringControl, UnitCombatConfig
-from Airis.lulilo.combat.guidance import MissileControlRegistry
-from Airis.lulilo.combat.weapons import WeaponSystem
-from Airis.lulilo.core.rng import RNGManager
-from Airis.lulilo.entities.pools import (
+from Airia.lulilo.combat.damage_submission import DamageSubmissionPool
+from Airia.lulilo.combat.engagement import FiringControl, UnitCombatConfig
+from Airia.lulilo.combat.guidance import MissileControlRegistry
+from Airia.lulilo.combat.weapons import WeaponSystem
+from Airia.lulilo.core.rng import RNGManager
+from Airia.lulilo.entities.pools import (
     ArmorPool,
     BoxPool,
     FormationAIPool,
     PartType,
     ProjectilePool,
 )
-from Airis.lulilo.entities.twin import TWIN_KIND_ARMOR, TwinPool, TwinStatus
-from Airis.lulilo.logistics.ammo import AmmoManager
-from Airis.lulilo.simulation.ai import ArtilleryAI, FormationAI, UnitRole
-from Airis.lulilo.simulation.loop import EventBus, SimulationLoop
-from Airis.lulilo.simulation.state import SimulationState
-from Airis.lulilo.simulation.twin_engine import TwinEngine
+from Airia.lulilo.entities.twin import TWIN_KIND_ARMOR, TwinPool, TwinStatus
+from Airia.lulilo.logistics.ammo import AmmoManager
+from Airia.lulilo.simulation.ai import ArtilleryAI, FormationAI, UnitRole
+from Airia.lulilo.simulation.loop import EventBus, SimulationLoop
+from Airia.lulilo.simulation.state import SimulationState
+from Airia.lulilo.simulation.twin_engine import TwinEngine
 
 
 class _Loop:
@@ -178,7 +178,7 @@ class TestCase4AirRelayEndToEnd:
     """用例 4：A 导 B 射命中超视距目标（relay_guidance 端到端）。"""
 
     def test_relay_guided_aam_hits(self) -> None:
-        from Airis.lulilo.entities.pools import AircraftPool
+        from Airia.lulilo.entities.pools import AircraftPool
 
         from tests.test_phase7_aam import _air_registry
 
@@ -187,7 +187,7 @@ class TestCase4AirRelayEndToEnd:
         boxes = BoxPool(capacity=64)
         proj = ProjectilePool(capacity=32)
         emitters = None
-        from Airis.lulilo.entities.pools import EmitterPool
+        from Airia.lulilo.entities.pools import EmitterPool
 
         emitters = EmitterPool(capacity=64)
         firing = FiringControl(

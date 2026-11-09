@@ -9,9 +9,9 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from Airis.lulilo.combat.engagement import FiringControl, UnitCombatConfig
-from Airis.lulilo.core.rng import RNGManager
-from Airis.lulilo.entities.pools import (
+from Airia.lulilo.combat.engagement import FiringControl, UnitCombatConfig
+from Airia.lulilo.core.rng import RNGManager
+from Airia.lulilo.entities.pools import (
     EMITTER_KIND_DECOY,
     EMITTER_KIND_ILLUMINATOR,
     EMITTER_KIND_PLATFORM_RADAR,
@@ -24,15 +24,15 @@ from Airis.lulilo.entities.pools import (
     PartType,
     ProjectilePool,
 )
-from Airis.lulilo.logistics.ammo import AmmoManager
-from Airis.lulilo.simulation.ai import (
+from Airia.lulilo.logistics.ammo import AmmoManager
+from Airia.lulilo.simulation.ai import (
     CommunicationNetwork,
     FormationAI,
     RWRDetector,
     UnitOrder,
     UnitRole,
 )
-from Airis.lulilo.simulation.loop import EventBus, SimulationLoop
+from Airia.lulilo.simulation.loop import EventBus, SimulationLoop
 
 _SIMPLE_PARTS = [
     (PartType.HULL, 1.5, 3.0, 1.0, 0.0, 0.0, 0.0),

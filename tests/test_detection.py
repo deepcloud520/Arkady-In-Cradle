@@ -8,13 +8,13 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from Airis.lulilo.detection.los import (
+from Airia.lulilo.detection.los import (
     LosChecker,
     line_of_sight,
     line_of_sight_batch,
     terrain_intercept,
 )
-from Airis.lulilo.detection.sensors import (
+from Airia.lulilo.detection.sensors import (
     RCS_APC,
     RCS_HELICOPTER,
     RCS_PERSON,
@@ -31,7 +31,7 @@ from Airis.lulilo.detection.sensors import (
     radar_detection_probability,
     radar_detection_range,
 )
-from Airis.lulilo.terrain.heightfield import MAT_BRIDGE, MAT_TERRAIN, Heightfield
+from Airia.lulilo.terrain.heightfield import MAT_BRIDGE, MAT_TERRAIN, Heightfield
 
 
 # ---------------------------------------------------------------------------

@@ -493,7 +493,7 @@ class DamageSubmissionPool:
 
 ### 11.1 测试场景（⚠️ Phase 10 前不新增地图）
 
-> 用户拍板（2026-08-14）：**Airis 引擎完全开发完（Phase 10）之前不新增地图**，测试场景一律
+> 用户拍板（2026-08-14）：**Airia 引擎完全开发完（Phase 10）之前不新增地图**，测试场景一律
 > 复用 `tests/terrain_factory.py` 的现有地图（`flat`/`fbm`/`default`），或作为**纯测试地图**维护。
 
 | 测试场景 | 敌我编队 | 地形（复用 factory） | 验证目标 |

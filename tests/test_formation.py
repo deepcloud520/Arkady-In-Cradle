@@ -15,13 +15,13 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from Airis.lulilo.combat.collision import FormationResolver, separate_armors_hash
-from Airis.lulilo.combat.engagement import FiringControl, UnitCombatConfig
-from Airis.lulilo.core.rng import RNGManager
-from Airis.lulilo.entities.pools import ArmorPool, BoxPool, ProjectilePool
-from Airis.lulilo.logistics.ammo import AmmoManager
-from Airis.lulilo.logistics.fuel import FuelManager
-from Airis.lulilo.simulation.loop import EventBus
+from Airia.lulilo.combat.collision import FormationResolver, separate_armors_hash
+from Airia.lulilo.combat.engagement import FiringControl, UnitCombatConfig
+from Airia.lulilo.core.rng import RNGManager
+from Airia.lulilo.entities.pools import ArmorPool, BoxPool, ProjectilePool
+from Airia.lulilo.logistics.ammo import AmmoManager
+from Airia.lulilo.logistics.fuel import FuelManager
+from Airia.lulilo.simulation.loop import EventBus
 
 import tests.test_phase3_integration as integ  # 复用 spawn_tank / make_battlefield
 

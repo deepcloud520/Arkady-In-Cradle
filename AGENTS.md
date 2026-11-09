@@ -173,6 +173,15 @@ def is_solid_at(spans, count, col, layer): # 该层是否被实心段覆盖（�
 
 `Heightfield.remove_span(gx, gy, z0, z1)` 截断/删除受影响列 → `TileManager.mark_dirty()` → 后台局部重建。
 
+#### 地面面片强制政策（红线，见 `docs/worldmesh-ground-patch-policy.md`）
+
+- **地面必须以显式 `WorldPatch`（`MAT_TERRAIN` + `FACE_TOP`）存在于逻辑 `WorldMesh`**；
+  运行时查询链固定为 `locate_patch(x, y, hint_z) → patch_id → patch.z_at(x, y)`。
+- **禁止**「地面不入面片集合、单位贴地直接读 `Heightfield.surface_z()` / `continuous_ground` 网格」这类方案（即使平地图 160k 面片很浪费）。
+  面片多 = 合并面片（共面/误差界/多边形化/区块 patch），**不是删除面片**。
+- `continuous_ground` 只有两个合法消费者：加载期算地面 patch 顶点 z、渲染三角网格（一次性产物）。
+  `include_ground=False` **仅允许**用于 `render_world_mesh`，逻辑 WorldMesh 必须包含地面。
+
 
 ### 3.3 寻路系统：离线烘焙NavGraph + 运行时A*
 
@@ -340,11 +349,11 @@ core → coordinates → terrain → entities → movement → detection → com
 
 **依赖方向严格向下**：高层可以导入低层，反之禁止。
 
-**三层子包（2026-08-10）**：以上依赖链对应无头引擎 `Airis/lulilo/` 子包内部
+**三层子包（2026-08-10）**：以上依赖链对应无头引擎 `Airia/lulilo/` 子包内部
 （`core → coordinates → terrain → entities → movement → detection → combat → logistics → simulation`）。
-渲染与叙事位于引擎之外：`Airis/render/`（moderngl 官方实现，含 `hud/`）、
-`Airis/ui/`（Qt 交互上层）、`Airis/narrative/`（独立叙事层，消费引擎状态）。
-引擎（lulilo）不反向依赖任何上层；Phase 清单中的模块路径即位于 `Airis/lulilo/` 内。
+渲染与叙事位于引擎之外：`Airia/render/`（moderngl 官方实现，含 `hud/`）、
+`Airia/ui/`（Qt 交互上层）、`Airia/narrative/`（独立叙事层，消费引擎状态）。
+引擎（lulilo）不反向依赖任何上层；Phase 清单中的模块路径即位于 `Airia/lulilo/` 内。
 
 ### 4.2 命名与编码
 
@@ -550,7 +559,7 @@ core → coordinates → terrain → entities → movement → detection → com
 - [x] 实现 `ui/main_window.py`（QMainWindow 主窗口布局：QSplitter 战场+侧栏、主题菜单、叙事菜单、状态栏；"选择测试地图生成器"由 `terrain/factory.py` 的 TerrainFactory 承担）
 - [x] 实现 `ui/views.py`（战术地图 + 对话面板 + 档案库）——实际拆分为独立面板文件：`ui/narrative_overlay.py`（对话）、`ui/archive_panel.py`（档案）、`ui/briefing_panel.py`（简报）、`ui/detail_panel.py`（详情，三级信息）
 - [x] 实现至少 3 个 shader 主题：default（现实军事）/ constructivism（构成主义）/ anime（日系动漫 cel+描边），见 `assets/shaders/<主题>/`
-- [x] 实现 shader 目录管理——`assets/shaders/`（每主题 `terrain.vert/frag` + `theme.toml`），`Airis/render/theme.py` ThemeManager 热切换
+- [x] 实现 shader 目录管理——`assets/shaders/`（每主题 `terrain.vert/frag` + `theme.toml`），`Airia/render/theme.py` ThemeManager 热切换
 - [x] 实现 `ui/controls.py`（键盘 → 叙事/命令队列：空格暂停 / 回车推进 / 1-9 选选项 / S 跳过 / Ctrl+1/2/3 主题 / F1 帮助；鼠标事件在 `render/gl_widget.py`）
 - [x] 实现自由摄像机的 UI 控制（左键拖拽旋转、滚轮缩放，Phase 1 已有，Phase 5 接线拾取交互）
 
@@ -595,7 +604,7 @@ core → coordinates → terrain → entities → movement → detection → com
 > 📌 **设计定稿（2026-08-14）**：`docs/phase7-air-design.md`——空中部队是 6b 制导管线 +
 > 6c 编队 AI 框架 + `EmitterPool` 电磁世界的「泛化消费者」，净新增只有 AircraftPool /
 > 气动飞控内核 / 空中 AI / 坠毁链五块；实施管线 `docs/phase7-air-pipeline.md`（步骤①~⑪
-> **全量落地**，2026-08-16；`Airis/lulilo/movement/aerodynamics.py` + `flight_control.py` +
+> **全量落地**，2026-08-16；`Airia/lulilo/movement/aerodynamics.py` + `flight_control.py` +
 > `simulation/air_ai.py` + `combat/aircraft.py` + 10 个测试文件 + `tests/benchmark_phase7.py`）。
 
 **任务清单**：
@@ -623,8 +632,15 @@ core → coordinates → terrain → entities → movement → detection → com
     炮兵：自主接受友军请求打击指令并规避反炮 ✅ 订阅 support_request + 6c 反炮闭环
     空军：数据链A导B射，超视距控制与规避导弹，编队选择战术（如磨盘战术）✅ A导B射（relay_guidance）+ 协同规避；磨盘战术留待后续
 #### Phase 9 性能测试
-**目标**： 15km x 15km地图为最小尺寸，允许400km x 400km 地图正常流畅运行
+**目标**： AIC 常规关卡 **≥ 60km × 60km**（15km 保留为演示/局部地图），允许 400km × 400km 地图正常流畅运行
 > 可行路径（可选多个结合）：流式加载，区块加载，LOS，稀疏四叉树，区块变分辨率等等，留作进一步讨论研究新方案
+>
+> 📌 **可行性研究已定稿（2026-11-04）**：`docs/phase9-large-terrain-chunking-feasibility.md`
+> ——AIC 常规关卡以 **60km×60km** 为基线。结论：**面片合并 + 分块加载 + 区块内 span 精度自定义必须组合**，
+> 单用任一条都不够（合并只省 50%~97% 且随地形复杂度增长；不分块则全图常驻不可行）。
+> 落地顺序：**P1 数据层（WorldMesh SoA + 向量化平滑/面积 + Numba 合并）→ P2 分块骨架 → P3 精度/LOD →
+> P4 几何消费者适配 → P5 渲染分块 → P6 60km 验收**。P1 可独立把当前 15km 图加载从 40s 级压到 1~2s 级。
+
 ## 六、常见陷阱（必读）
 
 | 陷阱 | 解决方案 |
@@ -641,6 +657,7 @@ core → coordinates → terrain → entities → movement → detection → com
 | glm 矩阵转 numpy 用 `to_list()` 转置错乱 | **PyGLM 与 numpy 布局规则不同**：`mat4.to_list()` 返回 **4 个列向量**（非扁平数组），`np.array(to_list()).reshape(4,4, order='F')` 形状已是 (4,4) 属 no-op → 矩阵被转置 → 投影/渲染坐标错乱（HUD 圆全重合、clip_w 差 500 倍）。**必须用 `np.frombuffer(mat.to_bytes(), dtype=np.float32).reshape(4,4, order='F')`**（与 GL uniform 写入完全一致的 column-major 扁平，已验证与 glm 乘法逐元素一致）。注意 identity 矩阵转置不变 → 单测测不出，须配非 identity 相机投影对比测试 |
 | HUD 标记低角度被地形剔除 | HUD pass 期间 `ctx.disable(DEPTH_TEST)`（标记永远最上层），画完 finally 恢复；HUD 顶点 z=0 深度 ~0.5，GL_LESS 下近处地形（深度<0.5）会把标记剔除 |
 | 改 Numba 核后出现诡异报错（缓存与代码不一致） | 项目全量使用 `@njit(cache=True)`，改动签名/常量或升级 Numba 后旧缓存会静默失效。**每次修改任何 Numba 核后必须运行一次** `uv run python clear_numba_cache.py -y` 再跑测试 |
+| 「地面 patch 太多，干脆不入 WorldMesh、直接查高度场」 | **红线，禁止**（见 `docs/worldmesh-ground-patch-policy.md`）：面片多 → 合并面片；删地面面片会同时删掉 `mesh_id` 契约、多表面 hint_z 裁决、材质/法线/可行走性。`continuous_ground` 只喂加载期 patch 顶点与渲染网格 |
 
 
 ## 七、常用命令
@@ -679,9 +696,9 @@ uv run python clear_numba_cache.py --all   # 连同 .pyc 一起清
 
 ---
 ## 九、非代码目录
-- `story/` —— Obsidian 世界观笔记（中文 markdown），非源码
-- `assets/shaders/`、`assets/textures/` —— 预留，当前为空
-- `docs/` —— 项目实现的技术细节文档（`heightfield-design.md`、`phase3-combat-design.md`、`phase4-narrative-design.md`、`phase5-ui-pipeline-design.md`、`phase6-guidance-design.md`、`phase6-guidance-pipeline.md`、`phase6-ai-design.md`、`phase6-ai-pipeline.md`、`phase7-air-design.md`、`phase7-air-pipeline.md`、`phase8-datalink-design.md`、`数据链与战争迷雾设计.md`）
+- `story/` —— Obsidian 世界观笔记（中文 markdown），非源码。**体裁分层 / 版本清单 / 代码接口契约 / 范围外条目见 `story/README.md`**（`dialogues/` + `triggers/` 是跑得起来的**结构示例数据**，不是剧情定稿；设定正文在 `story/arkady in cradle/`）。协调性评审与施工记录见 `docs/story-architecture-review.md`
+- `assets/shaders/`、`assets/textures/` —— 着色器主题（default/constructivism/anime）；纹理预留
+- `docs/` —— 项目实现的技术细节文档（`heightfield-design.md`、`phase3-combat-design.md`、`phase4-narrative-design.md`、`phase5-ui-pipeline-design.md`、`phase6-guidance-design.md`、`phase6-guidance-pipeline.md`、`phase6-ai-design.md`、`phase6-ai-pipeline.md`、`phase7-air-design.md`、`phase7-air-pipeline.md`、`phase8-datalink-design.md`、`数据链与战争迷雾设计.md`、`worldmesh-ground-patch-policy.md`（地面面片强制政策，红线）、`phase9-large-terrain-chunking-feasibility.md`（60km 大地图可行性研究））
 - `Reference/` —— 参考数据与外部项目（武器数据库 CSV、参考实现）
 
 

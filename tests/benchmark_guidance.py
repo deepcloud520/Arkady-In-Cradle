@@ -14,11 +14,11 @@ import time
 
 import numpy as np
 
-from Airis.lulilo.combat.damage import ArmorType
-from Airis.lulilo.combat.engagement import GUIDED_MAX_ACCEL, FiringControl, UnitCombatConfig
-from Airis.lulilo.combat.guidance import MissileControlRegistry
-from Airis.lulilo.combat.weapons import WeaponSystem
-from Airis.lulilo.entities.pools import (
+from Airia.lulilo.combat.damage import ArmorType
+from Airia.lulilo.combat.engagement import GUIDED_MAX_ACCEL, FiringControl, UnitCombatConfig
+from Airia.lulilo.combat.guidance import MissileControlRegistry
+from Airia.lulilo.combat.weapons import WeaponSystem
+from Airia.lulilo.entities.pools import (
     MAX_ARMOR,
     MAX_BOXES,
     MAX_PROJ,
@@ -30,9 +30,9 @@ from Airis.lulilo.entities.pools import (
     ProjectilePool,
     ProjectileType,
 )
-from Airis.lulilo.logistics.ammo import AmmoManager
-from Airis.lulilo.logistics.fuel import FuelManager
-from Airis.lulilo.movement.integrate import integrate_guided_projectile_movement
+from Airia.lulilo.logistics.ammo import AmmoManager
+from Airia.lulilo.logistics.fuel import FuelManager
+from Airia.lulilo.movement.integrate import integrate_guided_projectile_movement
 from tests.test_guidance_pipeline import make_guided_registry
 
 N_MISSILES = 64

@@ -13,12 +13,12 @@ import math
 import numpy as np
 import pytest
 
-from Airis.lulilo.combat.damage_submission import DamageSubmissionPool
-from Airis.lulilo.combat.engagement import FiringControl
-from Airis.lulilo.combat.guidance import MissileControlRegistry
-from Airis.lulilo.combat.weapons import WeaponSystem
-from Airis.lulilo.core.rng import RNGManager
-from Airis.lulilo.entities.pools import (
+from Airia.lulilo.combat.damage_submission import DamageSubmissionPool
+from Airia.lulilo.combat.engagement import FiringControl
+from Airia.lulilo.combat.guidance import MissileControlRegistry
+from Airia.lulilo.combat.weapons import WeaponSystem
+from Airia.lulilo.core.rng import RNGManager
+from Airia.lulilo.entities.pools import (
     AircraftPool,
     AircraftState,
     ArmorPool,
@@ -26,9 +26,9 @@ from Airis.lulilo.entities.pools import (
     EmitterPool,
     ProjectilePool,
 )
-from Airis.lulilo.movement.aerodynamics import AircraftAero, integrate_aircraft_motion
-from Airis.lulilo.movement.flight_control import FlightControl
-from Airis.lulilo.simulation.air_ai import AirUnitAI, AirUnitOrder
+from Airia.lulilo.movement.aerodynamics import AircraftAero, integrate_aircraft_motion
+from Airia.lulilo.movement.flight_control import FlightControl
+from Airia.lulilo.simulation.air_ai import AirUnitAI, AirUnitOrder
 
 from tests.test_phase7_aam import _air_registry
 
@@ -152,7 +152,7 @@ class TestScoreKernel:
     """score_air_targets 评分内核（docs §6.3）。"""
 
     def test_tail_advantage_scores_higher(self) -> None:
-        from Airis.lulilo.simulation.air_ai import score_air_targets
+        from Airia.lulilo.simulation.air_ai import score_air_targets
 
         k = 2
         dist = np.array([5000.0, 5000.0], np.float32)
@@ -171,7 +171,7 @@ class TestScoreKernel:
         assert out[1] > out[0], "尾追优势（目标背离我）应得分更高"
 
     def test_altitude_advantage_scores_higher(self) -> None:
-        from Airis.lulilo.simulation.air_ai import score_air_targets
+        from Airia.lulilo.simulation.air_ai import score_air_targets
 
         k = 2
         dist = np.array([5000.0, 5000.0], np.float32)

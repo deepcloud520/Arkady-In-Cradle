@@ -9,8 +9,8 @@ import glm
 import numpy as np
 import pytest
 
-from Airis.render.adapter import WorldAdapter
-from Airis.render.picking import pick_nearest, project_world
+from Airia.render.adapter import WorldAdapter
+from Airia.render.picking import pick_nearest, project_world
 
 
 def _make_adapter(
@@ -128,7 +128,7 @@ def test_project_empty():
 
 def test_project_matches_glm():
     """真实相机 MVP：project_world 必须与 glm 逐点一致（覆盖 to_list 转置 bug）。"""
-    from Airis.render.camera import OrbitCamera
+    from Airia.render.camera import OrbitCamera
 
     cam = OrbitCamera(target=(256.0, 256.0, 0.0), distance=200.0, yaw=45.0, pitch=40.0)
     mvp = cam.mvp_matrix(1.6)
@@ -151,7 +151,7 @@ def test_project_matches_glm():
 
 def test_project_distinct_positions():
     """不同世界位置必须投影到不同屏幕点（回归：曾全部挤到同一位置）。"""
-    from Airis.render.camera import OrbitCamera
+    from Airia.render.camera import OrbitCamera
 
     cam = OrbitCamera(target=(256.0, 256.0, 0.0), distance=200.0, yaw=45.0, pitch=40.0)
     mvp = cam.mvp_matrix(1.6)
@@ -221,7 +221,7 @@ def test_adapter_unit_name_and_side():
 
 def test_side_model_mapper_defaults():
     """型号命名唯一数据源（entities.side.SIDE_MODEL）：GUI 与叙事层共用。"""
-    from Airis.lulilo.entities.side import SIDE_MODEL, Side, SideModelMapper, side_model
+    from Airia.lulilo.entities.side import SIDE_MODEL, Side, SideModelMapper, side_model
 
     assert SideModelMapper()(int(Side.NATO)) == "M1A2"
     assert SideModelMapper()(int(Side.PACT)) == "T-14"
@@ -236,7 +236,7 @@ def test_side_model_mapper_defaults():
 
 def test_side_model_mapper_role_models():
     """按 role 细分型号（2026-08-18 回归）：炮兵 ≠ MBT，role 覆盖优先于阵营默认。"""
-    from Airis.lulilo.entities.side import SIDE_ROLE_MODEL, Side, SideModelMapper, side_model
+    from Airia.lulilo.entities.side import SIDE_ROLE_MODEL, Side, SideModelMapper, side_model
 
     # 炮兵（role=1）：北约 M109 / 华约 2S19
     assert SideModelMapper()(int(Side.NATO), 1) == "M109"
@@ -298,8 +298,8 @@ def test_build_damaged_parts_reads_armor_flag():
     但引擎毁伤即释放槽位（active=False, parent=-1），已毁部位永远显示
     不出——「一直扣血但部位不坏」。现在渲染层直接读单位级标记。
     """
-    from Airis.lulilo.entities.pools import ArmorPool, BoxPool, PartType
-    from Airis.render.adapter import _build_damaged_parts
+    from Airia.lulilo.entities.pools import ArmorPool, BoxPool, PartType
+    from Airia.render.adapter import _build_damaged_parts
 
     armor = ArmorPool(capacity=8)
     idx = armor.spawn(0.0, 0.0, 0.0)
@@ -356,8 +356,8 @@ def test_pick_aircraft_handle():
     为确定性验证，把飞机放在地面单位正上方，选同一像素 → 应取屏幕更近者；
     本用例直接验证 aircraft handle 编码与解码往返 + 拾取优先性。
     """
-    from Airis.render.adapter import AIR_HANDLE_OFFSET, decode_handle, is_air_handle
-    from Airis.render.picking import pick_nearest
+    from Airia.render.adapter import AIR_HANDLE_OFFSET, decode_handle, is_air_handle
+    from Airia.render.picking import pick_nearest
 
     # 编码/解码往返
     h = AIR_HANDLE_OFFSET + 2
@@ -386,7 +386,7 @@ def test_pick_aircraft_handle():
 
 def test_adapter_aircraft_queries():
     """空中单位详情查询（型号/阵营/速度/高度/挂载/燃料/状态/编队）。"""
-    from Airis.render.adapter import AIR_HANDLE_OFFSET
+    from Airia.render.adapter import AIR_HANDLE_OFFSET
 
     av = _aircraft_view(side=0)
     adapter = _make_adapter(aircraft=av)
@@ -428,8 +428,8 @@ def test_adapter_part_armor_mm():
 
 def test_adapter_unit_formation_status():
     """编队 AI 状态（详情面板「编队 AI」区，2026-08-18）。"""
-    from Airis.lulilo.entities.pools import ArmorPool
-    from Airis.lulilo.simulation.state import SimulationState
+    from Airia.lulilo.entities.pools import ArmorPool
+    from Airia.lulilo.simulation.state import SimulationState
 
     st = SimulationState()
     armor = ArmorPool(capacity=8)

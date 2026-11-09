@@ -11,9 +11,9 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from Airis.lulilo.entities.pools import ArmorPool
-from Airis.lulilo.entities.twin import TWIN_KIND_ARMOR, TwinPool, TwinStatus
-from Airis.lulilo.simulation.datalink import (
+from Airia.lulilo.entities.pools import ArmorPool
+from Airia.lulilo.entities.twin import TWIN_KIND_ARMOR, TwinPool, TwinStatus
+from Airia.lulilo.simulation.datalink import (
     N_AIRCRAFT,
     N_ARMOR,
     N_FORMATION,

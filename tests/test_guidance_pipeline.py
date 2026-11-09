@@ -19,9 +19,9 @@ import numpy as np
 import pytest
 from numba import njit
 
-from Airis.lulilo.combat.damage import ArmorType
-from Airis.lulilo.combat.engagement import FiringControl
-from Airis.lulilo.combat.guidance import (
+from Airia.lulilo.combat.damage import ArmorType
+from Airia.lulilo.combat.engagement import FiringControl
+from Airia.lulilo.combat.guidance import (
     GuidanceStage,
     ManualOverride,
     MissileControlRegistry,
@@ -31,7 +31,7 @@ from Airis.lulilo.combat.guidance import (
     guidance_proportional_nav,
     guidance_pure_pursuit,
 )
-from Airis.lulilo.combat.weapons import (
+from Airia.lulilo.combat.weapons import (
     AmmoConfig,
     AmmoType,
     GuidanceType,
@@ -39,23 +39,23 @@ from Airis.lulilo.combat.weapons import (
     WeaponRegistry,
     WeaponSystem,
 )
-from Airis.lulilo.entities.pools import (
+from Airia.lulilo.entities.pools import (
     EmitterBand,
     EmitterPool,
     PartType,
     ProjectilePool,
     ProjectileType,
 )
-from Airis.lulilo.movement.integrate import (
+from Airia.lulilo.movement.integrate import (
     integrate_guided_projectile_movement,
     integrate_projectile_movement,
 )
-from Airis.lulilo.simulation.loop import EventBus
-from Airis.lulilo.simulation.serialization import (
+from Airia.lulilo.simulation.loop import EventBus
+from Airia.lulilo.simulation.serialization import (
     deserialize_battlefield,
     serialize_battlefield,
 )
-from Airis.lulilo.simulation.state import SimulationState
+from Airia.lulilo.simulation.state import SimulationState
 from tests.test_phase3_integration import (
     DEFAULT_PARTS,
     make_battlefield,
@@ -618,7 +618,7 @@ class TestGuidanceSerialization:
         armor, boxes, projectiles, ammo, fuel, fc = make_battlefield(rng=_TestRNG())
         state = SimulationState(sim_time=2.0, tick_count=3)
         # 手工构造"旧版" payload（只有旧字段）
-        from Airis.lulilo.simulation.serialization import _pack_pool_arrays
+        from Airia.lulilo.simulation.serialization import _pack_pool_arrays
 
         payload = {
             "version": 1,

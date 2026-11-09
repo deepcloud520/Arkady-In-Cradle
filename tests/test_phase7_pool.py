@@ -11,7 +11,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from Airis.lulilo.entities.pools import (
+from Airia.lulilo.entities.pools import (
     MAX_AIR_FORMATIONS,
     MAX_AIRCRAFT,
     AirFormationPool,
@@ -26,11 +26,11 @@ from Airis.lulilo.entities.pools import (
     PartType,
     ProjectilePool,
 )
-from Airis.lulilo.simulation.serialization import (
+from Airia.lulilo.simulation.serialization import (
     deserialize_battlefield,
     serialize_battlefield,
 )
-from Airis.lulilo.simulation.state import SimulationState
+from Airia.lulilo.simulation.state import SimulationState
 
 
 # ---------------------------------------------------------------------------
@@ -147,7 +147,7 @@ class TestBoxAircraftParent:
         aircraft.heading[air_idx] = np.pi / 2  # 90° 航向
         boxes = BoxPool(capacity=8)
         # 机身箱：局部偏移 (1,0,0)，heading=90° → 世界偏移应为 (0,1,0)
-        from Airis.lulilo.entities.pools import ArmorPool
+        from Airia.lulilo.entities.pools import ArmorPool
 
         armor = ArmorPool(capacity=1)  # 空装甲占位（飞机测试不涉及地面箱）
         b = boxes.spawn(air_idx, int(PartType.AIRCRAFT), 1.2, 4.5, 0.8,
@@ -165,7 +165,7 @@ class TestBoxAircraftParent:
 
     def test_armor_box_still_works_without_aircraft(self) -> None:
         """缺省 aircraft=None 时装甲箱行为不变（兼容旧调用点）。"""
-        from Airis.lulilo.entities.pools import ArmorPool
+        from Airia.lulilo.entities.pools import ArmorPool
 
         armor = ArmorPool()
         a = armor.spawn(0, 0, 0)
@@ -185,7 +185,7 @@ class TestEmitterAircraftParent:
     """机载雷达 / 尾焰绑定飞机并随位置同步。"""
 
     def test_activate_aircraft_radar(self) -> None:
-        from Airis.lulilo.entities.pools import EmitterPool, ArmorPool, ProjectilePool
+        from Airia.lulilo.entities.pools import EmitterPool, ArmorPool, ProjectilePool
 
         aircraft = AircraftPool()
         air_idx = aircraft.spawn(0, 0, 3000.0)
@@ -205,7 +205,7 @@ class TestEmitterAircraftParent:
         assert em.pos[e, 2] == pytest.approx(3500.0)
 
     def test_aircraft_destroy_cascades_rf(self) -> None:
-        from Airis.lulilo.entities.pools import EmitterPool, ArmorPool, ProjectilePool
+        from Airia.lulilo.entities.pools import EmitterPool, ArmorPool, ProjectilePool
 
         aircraft = AircraftPool()
         air_idx = aircraft.spawn(0, 0, 3000.0)
@@ -218,7 +218,7 @@ class TestEmitterAircraftParent:
         assert not em.active[e], "飞机销毁 → 非红外 emitter 级联失活"
 
     def test_aircraft_ir_charge(self) -> None:
-        from Airis.lulilo.entities.pools import EmitterPool, ArmorPool, ProjectilePool
+        from Airia.lulilo.entities.pools import EmitterPool, ArmorPool, ProjectilePool
 
         aircraft = AircraftPool()
         air_idx = aircraft.spawn(0, 0, 3000.0)
@@ -308,7 +308,7 @@ class TestSerialization:
         assert save.air_formations.target_zone[g, 0] == pytest.approx(10.0)
 
     def test_projectile_guid_target_vel_round_trip(self) -> None:
-        from Airis.lulilo.entities.pools import MAX_PROJ
+        from Airia.lulilo.entities.pools import MAX_PROJ
 
         p = ProjectilePool(capacity=16)
         idx = p.spawn(0, 0, 0, 10, 0, 0)

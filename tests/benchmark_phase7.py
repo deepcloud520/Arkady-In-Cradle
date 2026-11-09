@@ -15,7 +15,7 @@ import time
 
 import numpy as np
 
-from Airis.lulilo.entities.pools import (
+from Airia.lulilo.entities.pools import (
     MAX_AIRCRAFT,
     AircraftPool,
     AircraftState,
@@ -24,7 +24,7 @@ from Airis.lulilo.entities.pools import (
     EmitterPool,
     ProjectilePool,
 )
-from Airis.lulilo.movement.aerodynamics import AircraftAero, integrate_aircraft_motion
+from Airia.lulilo.movement.aerodynamics import AircraftAero, integrate_aircraft_motion
 
 
 def _ms(elapsed_s: float, iterations: int) -> float:
@@ -126,13 +126,13 @@ def benchmark_prox_fuse() -> float:
 
 def benchmark_full_air_frame() -> float:
     """完整空战帧：气动 + 编队几何 + 近炸 + 飞机碰撞（docs §十三 全帧预算）。"""
-    from Airis.lulilo.combat.collision import detect_proj_aircraft_batch
-    from Airis.lulilo.combat.damage_submission import DamageSubmissionPool
-    from Airis.lulilo.combat.engagement import FiringControl
-    from Airis.lulilo.combat.guidance import MissileControlRegistry
-    from Airis.lulilo.combat.weapons import WeaponSystem
-    from Airis.lulilo.core.rng import RNGManager
-    from Airis.lulilo.movement.flight_control import FlightControl, build_air_movement_hook
+    from Airia.lulilo.combat.collision import detect_proj_aircraft_batch
+    from Airia.lulilo.combat.damage_submission import DamageSubmissionPool
+    from Airia.lulilo.combat.engagement import FiringControl
+    from Airia.lulilo.combat.guidance import MissileControlRegistry
+    from Airia.lulilo.combat.weapons import WeaponSystem
+    from Airia.lulilo.core.rng import RNGManager
+    from Airia.lulilo.movement.flight_control import FlightControl, build_air_movement_hook
 
     from tests.test_phase7_aam import _air_registry
 

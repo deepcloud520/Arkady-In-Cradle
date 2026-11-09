@@ -15,29 +15,29 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from Airis.lulilo.combat.damage import ArmorType
-from Airis.lulilo.combat.engagement import (
+from Airia.lulilo.combat.damage import ArmorType
+from Airia.lulilo.combat.engagement import (
     FiringControl,
     UnitCombatConfig,
     solve_direct_fire_elevation,
 )
-from Airis.lulilo.core.rng import RNGManager
-from Airis.lulilo.entities.pools import (
+from Airia.lulilo.core.rng import RNGManager
+from Airia.lulilo.entities.pools import (
     ArmorPool,
     BoxPool,
     PartType,
     ProjectilePool,
 )
-from Airis.lulilo.logistics.ammo import AmmoManager
-from Airis.lulilo.logistics.fuel import FuelManager
-from Airis.lulilo.simulation.loop import EventBus, SimulationLoop
-from Airis.lulilo.simulation.serialization import (
+from Airia.lulilo.logistics.ammo import AmmoManager
+from Airia.lulilo.logistics.fuel import FuelManager
+from Airia.lulilo.simulation.loop import EventBus, SimulationLoop
+from Airia.lulilo.simulation.serialization import (
     deserialize_battlefield,
     load_from_file,
     save_to_file,
     serialize_battlefield,
 )
-from Airis.lulilo.simulation.state import SimulationState
+from Airia.lulilo.simulation.state import SimulationState
 
 
 # ---------------------------------------------------------------------------

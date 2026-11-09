@@ -14,18 +14,18 @@ import time
 
 import numpy as np
 
-from Airis.lulilo.detection.los import line_of_sight_batch
-from Airis.lulilo.detection.sensors import (
+from Airia.lulilo.detection.los import line_of_sight_batch
+from Airia.lulilo.detection.sensors import (
     RCS_TANK,
     evaluate_sensor_detection,
     radar_detection_range,
 )
-from Airis.lulilo.entities.pools import MAX_ARMOR, MAX_PROJ, ArmorPool, ProjectilePool
-from Airis.lulilo.movement.integrate import (
+from Airia.lulilo.entities.pools import MAX_ARMOR, MAX_PROJ, ArmorPool, ProjectilePool
+from Airia.lulilo.movement.integrate import (
     integrate_armor_movement,
     integrate_projectile_movement,
 )
-from Airis.lulilo.terrain.heightfield import MAT_TERRAIN, Heightfield
+from Airia.lulilo.terrain.heightfield import MAT_TERRAIN, Heightfield
 
 
 def benchmark_movement_armor() -> None:

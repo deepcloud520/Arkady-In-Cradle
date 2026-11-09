@@ -18,24 +18,24 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from Airis.lulilo.combat.collision import CollisionHit
-from Airis.lulilo.combat.damage import ArmorType
-from Airis.lulilo.combat.damage_submission import (
+from Airia.lulilo.combat.collision import CollisionHit
+from Airia.lulilo.combat.damage import ArmorType
+from Airia.lulilo.combat.damage_submission import (
     DamageKind,
     DamageSubmissionPool,
     resolve_area_damage,
 )
-from Airis.lulilo.combat.engagement import FiringControl
-from Airis.lulilo.combat.weapons import (
+from Airia.lulilo.combat.engagement import FiringControl
+from Airia.lulilo.combat.weapons import (
     AmmoConfig,
     AmmoType,
     WeaponConfig,
     WeaponRegistry,
     WeaponSystem,
 )
-from Airis.lulilo.entities.pools import ProjectileType
-from Airis.lulilo.simulation.loop import EventBus
-from Airis.lulilo.simulation.state import SimulationState
+from Airia.lulilo.entities.pools import ProjectileType
+from Airia.lulilo.simulation.loop import EventBus
+from Airia.lulilo.simulation.state import SimulationState
 from tests.test_guidance_pipeline import _TestRNG, spawn_at
 from tests.test_phase3_integration import hull_health, make_battlefield
 

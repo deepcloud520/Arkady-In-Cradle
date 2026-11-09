@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
-from Airis.render.gl_widget import GLWidget
+from Airia.render.gl_widget import GLWidget
 from _output import output_path
 from tests.terrain_factory import TerrainFactory
 

@@ -130,8 +130,8 @@ def main() -> int:
     parser.add_argument(
         "--roots",
         nargs="*",
-        default=["Airis"],
-        help="要扫描的根目录（相对项目根，可多个）。默认: Airis",
+        default=["Airia"],
+        help="要扫描的根目录（相对项目根，可多个）。默认: Airia",
     )
     parser.add_argument(
         "-v", "--verbose",

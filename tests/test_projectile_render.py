@@ -11,14 +11,14 @@ from __future__ import annotations
 
 import numpy as np
 
-from Airis.lulilo.entities.pools import (
+from Airia.lulilo.entities.pools import (
     ArmorPool,
     BoxPool,
     ProjectilePool,
     ProjectileType,
 )
-from Airis.lulilo.simulation.state import SimulationState
-from Airis.render.adapter import WorldAdapter
+from Airia.lulilo.simulation.state import SimulationState
+from Airia.render.adapter import WorldAdapter
 
 
 def _rig() -> tuple[SimulationState, int, int, ProjectilePool]:

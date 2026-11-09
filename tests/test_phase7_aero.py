@@ -11,8 +11,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from Airis.lulilo.entities.pools import AircraftPool, AircraftState
-from Airis.lulilo.movement.aerodynamics import (
+from Airia.lulilo.entities.pools import AircraftPool, AircraftState
+from Airia.lulilo.movement.aerodynamics import (
     AircraftAero,
     integrate_aircraft_motion,
 )

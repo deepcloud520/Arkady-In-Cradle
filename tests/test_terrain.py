@@ -4,8 +4,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from Airis.lulilo.terrain import TerrainMap
-from Airis.lulilo.coordinates.grid import grid_to_world, world_to_grid
+from Airia.lulilo.terrain import TerrainMap
+from Airia.lulilo.coordinates.grid import grid_to_world, world_to_grid
 from tests.terrain_factory import TerrainFactory, TerrainFactoryConfig
 
 # 固定小地图，含一座桥和一段隧道，便于精确断言

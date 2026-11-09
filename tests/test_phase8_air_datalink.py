@@ -13,12 +13,12 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from Airis.lulilo.combat.damage_submission import DamageSubmissionPool
-from Airis.lulilo.combat.engagement import FiringControl
-from Airis.lulilo.combat.guidance import MissileControlRegistry
-from Airis.lulilo.combat.weapons import WeaponSystem
-from Airis.lulilo.core.rng import RNGManager
-from Airis.lulilo.entities.pools import (
+from Airia.lulilo.combat.damage_submission import DamageSubmissionPool
+from Airia.lulilo.combat.engagement import FiringControl
+from Airia.lulilo.combat.guidance import MissileControlRegistry
+from Airia.lulilo.combat.weapons import WeaponSystem
+from Airia.lulilo.core.rng import RNGManager
+from Airia.lulilo.entities.pools import (
     AirFormationPool,
     AircraftPool,
     ArmorPool,
@@ -27,9 +27,9 @@ from Airis.lulilo.entities.pools import (
     EmitterPool,
     ProjectilePool,
 )
-from Airis.lulilo.movement.aerodynamics import AircraftAero
-from Airis.lulilo.movement.flight_control import FlightControl
-from Airis.lulilo.simulation.air_ai import (
+from Airia.lulilo.movement.aerodynamics import AircraftAero
+from Airia.lulilo.movement.flight_control import FlightControl
+from Airia.lulilo.simulation.air_ai import (
     AirFormationAI,
     AirUnitAI,
     AirUnitOrder,

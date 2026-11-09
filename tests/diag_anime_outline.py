@@ -19,7 +19,7 @@ import numpy as np
 from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QApplication
 
-from Airis.render.gl_widget import GLWidget
+from Airia.render.gl_widget import GLWidget
 from _output import clean_output_dir
 
 _BG_LUM = 25.0

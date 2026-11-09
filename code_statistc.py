@@ -13,7 +13,7 @@ def count_code_lines_in_directory(directory: Path, glob_pattern: str = "*.py") -
     return total_lines
 if __name__ == "__main__":
     root_dir = Path(__file__).parent 
-    total = count_code_lines_in_directory(root_dir / "Airis")
+    total = count_code_lines_in_directory(root_dir / "Airia")
     total += count_code_lines_in_directory(root_dir / "tests")
     total += count_code_lines_in_directory(root_dir / "docs", glob_pattern="*.md")
     print(f"Total code lines: {total}")

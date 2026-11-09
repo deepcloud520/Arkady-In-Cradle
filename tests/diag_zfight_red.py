@@ -28,8 +28,8 @@ from PySide6.QtGui import QImage, QSurfaceFormat
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtWidgets import QApplication
 
-from Airis.lulilo.terrain.map import TerrainMap
-from Airis.render.camera import OrbitCamera
+from Airia.lulilo.terrain.map import TerrainMap
+from Airia.render.camera import OrbitCamera
 from _output import clean_output_dir, output_path
 from tests.terrain_factory import TerrainFactory
 

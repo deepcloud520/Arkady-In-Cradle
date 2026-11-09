@@ -15,11 +15,11 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from Airis.lulilo.combat.collision import (
+from Airia.lulilo.combat.collision import (
     CollisionDetector,
     segment_aabb_single,
 )
-from Airis.lulilo.combat.damage import (
+from Airia.lulilo.combat.damage import (
     ArmorType,
     DamageResolver,
     compute_armor_eff,
@@ -27,12 +27,12 @@ from Airis.lulilo.combat.damage import (
     resolve_hit_dispersion,
     resolve_penetration_single,
 )
-from Airis.lulilo.combat.weapons import WeaponRegistry, WeaponSystem
-from Airis.lulilo.logistics.ammo import AmmoManager
-from Airis.lulilo.logistics.fuel import FuelManager
-from Airis.lulilo.simulation.commands import Command, CommandQueue, CommandType
-from Airis.lulilo.simulation.loop import SimulationLoop
-from Airis.lulilo.simulation.state import SimulationState
+from Airia.lulilo.combat.weapons import WeaponRegistry, WeaponSystem
+from Airia.lulilo.logistics.ammo import AmmoManager
+from Airia.lulilo.logistics.fuel import FuelManager
+from Airia.lulilo.simulation.commands import Command, CommandQueue, CommandType
+from Airia.lulilo.simulation.loop import SimulationLoop
+from Airia.lulilo.simulation.state import SimulationState
 
 
 # ===========================================================================

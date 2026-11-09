@@ -14,11 +14,11 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from Airis.lulilo.terrain.factory import TerrainFactory, TerrainFactoryConfig
-from Airis.lulilo.terrain.map import TerrainMap
-from Airis.lulilo.terrain.surface import WorldMeshRenderer
-from Airis.lulilo.terrain.dual_contour import DualContourBuilder
-from Airis.lulilo.terrain.world_mesh import FACE_BOTTOM, FACE_TOP
+from Airia.lulilo.terrain.factory import TerrainFactory, TerrainFactoryConfig
+from Airia.lulilo.terrain.map import TerrainMap
+from Airia.lulilo.terrain.surface import WorldMeshRenderer
+from Airia.lulilo.terrain.dual_contour import DualContourBuilder
+from Airia.lulilo.terrain.world_mesh import FACE_BOTTOM, FACE_TOP
 
 
 BRIDGE = {"x0": 20, "y0": 20, "x1": 30, "y1": 22}  # 3×11 桥（界内）

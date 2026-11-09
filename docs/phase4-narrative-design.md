@@ -55,7 +55,7 @@
 └────────────────────────────────────────┼─────────────────────┘
                                          │
 ┌────────────────────────────────────────▼─────────────────────┐
-│                    叙 事 层（Airis/narrative/）               │
+│                    叙 事 层（Airia/narrative/）               │
 │                                                              │
 │  ┌──────────────┐   ┌──────────────┐   ┌──────────────────┐  │
 │  │ DialogueEngine│◄──│TriggerSystem │◄──│ NarrativeEngine  │  │
@@ -785,7 +785,7 @@ class BriefingGenerator:
 ## 八、文件规划
 
 ```
-Airis/narrative/
+Airia/narrative/
     __init__.py           # 导出 NarrativeEngine / DialogueEngine / TriggerSystem / ...
     dialogue.py           # DialogueTree / DialogueNode / DialogueEngine
     triggers.py           # TriggerRule / TriggerSystem / ConditionEvaluator

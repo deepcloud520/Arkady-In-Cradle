@@ -15,8 +15,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from Airis.lulilo.movement.nav import patch_astar
-from Airis.lulilo.movement.pathfinding import (
+from Airia.lulilo.movement.nav import patch_astar
+from Airia.lulilo.movement.pathfinding import (
     Pathfinder,
     _centroid_path,
     _collect_portals,
@@ -24,7 +24,7 @@ from Airis.lulilo.movement.pathfinding import (
     _triarea2,
     funnel,
 )
-from Airis.lulilo.terrain.surface_mesh import SurfaceMesh, SurfacePatch
+from Airia.lulilo.terrain.surface_mesh import SurfaceMesh, SurfacePatch
 
 
 # ---------------------------------------------------------------------------

@@ -115,10 +115,10 @@
 
 ## 2026-08-13 Phase 5b + 5c 实施 ✅（面板布局 + HUD/拾取）
 - **WorldAdapter 扩展**：加 ammo/fuel 视图（from_snapshot 读 snapshot.logistics）+ unit_name/side_name（渲染层命名规则，不碰引擎）+ speed_at(占位 0) + get_stats()（级别 0 聚合：兵力/平均弹药燃料/时间）
-- **`Airis/render/picking.py`**（新增）：project_world（world→屏幕像素，O(N) 向量化）+ pick_nearest/Picker（O(N) 屏幕距离最近，max_px=30）
-- **`Airis/render/hud/overlay.py` + `log_widget.py`**（新增）：HUDOverlay（moderngl 屏幕空间圆点：NDC 实例化 quad，fragment 抗锯齿圆；选中高亮大圆黄色）+ LogWidget（Qt 透明滚动日志，QListWidget，200 行上限，layout_overlay 定位左下角）
+- **`Airia/render/picking.py`**（新增）：project_world（world→屏幕像素，O(N) 向量化）+ pick_nearest/Picker（O(N) 屏幕距离最近，max_px=30）
+- **`Airia/render/hud/overlay.py` + `log_widget.py`**（新增）：HUDOverlay（moderngl 屏幕空间圆点：NDC 实例化 quad，fragment 抗锯齿圆；选中高亮大圆黄色）+ LogWidget（Qt 透明滚动日志，QListWidget，200 行上限，layout_overlay 定位左下角）
 - **GLWidget**：移除旧 3D 实例化 quad 单位标记（Phase 5a 内联）→ HUD pass（_render_hud：投影→圆点，**HUD 期间 ctx.disable(DEPTH_TEST)** 保证永远最上层）；拾取信号 unit_hovered/unit_selected(int)（-1=空白）；鼠标：press 记录→移动超 4px 判拖拽（orbit）/否则单击选中；Esc 取消；setMouseTracking+StrongFocus
-- **`Airis/ui/` 四面板**（新增）：narrative_overlay（对话 Tab1：speaker/text/选项按钮→option_selected(dialogue_id,index)/历史）、detail_panel（详情 Tab4 三级信息 0 全局→1 悬浮→2 选中，QTextBrowser HTML）、archive_panel（档案 Tab2 骨架：时间线列表+刷新）、briefing_panel（简报 Tab3 骨架：生成简报按钮→to_text）
+- **`Airia/ui/` 四面板**（新增）：narrative_overlay（对话 Tab1：speaker/text/选项按钮→option_selected(dialogue_id,index)/历史）、detail_panel（详情 Tab4 三级信息 0 全局→1 悬浮→2 选中，QTextBrowser HTML）、archive_panel（档案 Tab2 骨架：时间线列表+刷新）、briefing_panel（简报 Tab3 骨架：生成简报按钮→to_text）
 - **main_window 装配**：AmmoManager/FuelManager 演示数据（set_unit，Snapshot.logistics 生效）+ CombatEventRecorder(:memory:, unit_registry/side_map) + set_unit_context + QTabWidget SidePanel + LogWidget 叠加 + 面板数据源回调（_recent_events_for/_timeline_for/_generate_briefing，getattr 延迟防御 _build_ui 阶段）
 - **验证**：299 passed（含 2 个投影回归测试）；smoke_gui 通过；verify_hud 像素统计 ally=1585/enemy=2596 ✓
 - 🔥 **glm.mat4.to_list() 转置陷阱（2026-08-13，HUD 圆重合/飞出根因）**：
@@ -131,8 +131,8 @@
 - 遗留：Level2 速度占位 0（ArmorPool 无 velocity）；HUD 文字标签/弹道线/命中标记（设计文档 §4.3）留待后续；anime 主题 Phase 5d 未做；verify_hud/diag_hud_projection 为诊断脚本
 
 ## 2026-08-13 Phase 5a 管线骨架 ✅（docs/phase5-ui-pipeline-design.md）
-- **新增 `Airis/render/adapter.py`**：WorldAdapter（渲染数据源抽象，Phase 5 透传 Real → Phase 8 切 Twin）+ UnitRenderStatus + `_build_damaged_parts`（box.parent≥0 & ~active & armor_active[parent] 聚合 5 部位损坏掩码）+ PART_NAMES
-- **新增 `Airis/render/theme.py`**：ThemeManager（discover/load/switch 热切换：先通知回调重绑 VAO 再 release 旧 program）+ Theme；`SHADER_ROOT = Path(__file__).parents[2]/assets/shaders`
+- **新增 `Airia/render/adapter.py`**：WorldAdapter（渲染数据源抽象，Phase 5 透传 Real → Phase 8 切 Twin）+ UnitRenderStatus + `_build_damaged_parts`（box.parent≥0 & ~active & armor_active[parent] 聚合 5 部位损坏掩码）+ PART_NAMES
+- **新增 `Airia/render/theme.py`**：ThemeManager（discover/load/switch 热切换：先通知回调重绑 VAO 再 release 旧 program）+ Theme；`SHADER_ROOT = Path(__file__).parents[2]/assets/shaders`
 - **着色器外提**：`assets/shaders/default/` + `constructivism/`（terrain.vert/frag + theme.toml [uniforms]）；GLWidget 内联着色器删除
 - **GLWidget 重构**：构造接受 `theme_manager`（默认自建加载 default）；buffer 缓存（_ground_vbo 等）支持主题切换重建 VAO；`set_adapter()` + 单位标记渲染（实例化 quad，读 WorldAdapter.armor_pos/active/side）
 - **MainWindow 骨架**：QSplitter(GLWidget:SidePanel 占位) + 主题菜单（ThemeManager.switch 热切换）+ 叙事「跳过对话」菜单 + 主循环 `_on_frame`（Simulation.step → WorldAdapter.from_snapshot → NarrativeEngine.tick → set_adapter → update）+ 状态栏（暂停/模拟时间/FPS/单位/主题/相机）；演示编队：友军 8 + 敌军 8（ArmorPool 动态附加 side 属性演示敌我，Phase 8 正式接入）
@@ -161,7 +161,7 @@
 - 实施顺序: 5a(WorldAdapter+主题) → 5b(面板) → 5c(HUD) → 5d(着色器)
 
 
-- **`Airis/narrative/` 5 模块全部搭建**（设计文档 §3）：
+- **`Airia/narrative/` 5 模块全部搭建**（设计文档 §3）：
   - `dialogue.py`：DialogueTreeConfig/DialogueNodeConfig/ChoiceOptionConfig（Pydantic YAML 加载）+ DialogueEngine 状态机（text/choice/branch/action 四类型 + set_flags + 条件选项 + pending_actions）
   - `triggers.py`：TriggerRule/TriggerCondition/TriggerAction（Pydantic）+ TriggerSystem（event_match/state_check/on_first_tick/flag_set/composite 五模式 + priority 降序 + once + cooldown）+ **ConditionEvaluator（ast 白名单安全求值）**
   - `commands.py`：CommandFactory 纯函数（action dict → Command，字符串类型→CommandType 映射）
@@ -345,26 +345,26 @@
 > 遗留：`core/logging.py`、`core/rng.py` 尚未实现（Phase 0 清单待补项）。
 
 ## 架构（2026-08-10 三层子包重构，对齐 AGENTS.md 4.1）
-- `Airis/lulilo/`：无头推演引擎（世界语 lulilo=「摇篮」，呼应《Arkady in Cradle》）
+- `Airia/lulilo/`：无头推演引擎（世界语 lulilo=「摇篮」，呼应《Arkady in Cradle》）
   - 子模块：`{core, coordinates, terrain, entities, movement, detection, navmesh, combat, logistics, simulation}`
-- `Airis/render/`：渲染官方实现（moderngl 绘制，游戏使用）：`camera.py` / `gl_widget.py` / `hud/`
-- `Airis/ui/`：Qt 交互上层：`main_window.py`（承载 render）
-- `Airis/narrative/`：独立叙事层，消费 engine 状态，不进底层
+- `Airia/render/`：渲染官方实现（moderngl 绘制，游戏使用）：`camera.py` / `gl_widget.py` / `hud/`
+- `Airia/ui/`：Qt 交互上层：`main_window.py`（承载 render）
+- `Airia/narrative/`：独立叙事层，消费 engine 状态，不进底层
 - 依赖方向：engine(无头) ← render/narrative；render ← ui；引擎不反向依赖上层
-- ⚠️ **Numba 缓存坑（重要）**：移动/重命名带 `njit(cache=True)` 的模块后，`.nbc` 缓存 pickle 引用旧模块路径 → `ModuleNotFoundError: No module named 'Airis.engine'`。修复 = 删除该包下 `__pycache__/` 让 Numba 重新编译
-- 顶层旧目录已全部清理完毕（2026-08-10），`Airis/` 仅剩 `{lulilo, render, ui, narrative}`
+- ⚠️ **Numba 缓存坑（重要）**：移动/重命名带 `njit(cache=True)` 的模块后，`.nbc` 缓存 pickle 引用旧模块路径 → `ModuleNotFoundError: No module named 'Airia.engine'`。修复 = 删除该包下 `__pycache__/` 让 Numba 重新编译
+- 顶层旧目录已全部清理完毕（2026-08-10），`Airia/` 仅剩 `{lulilo, render, ui, narrative}`
 - AGENTS.md 已重新统一：进度表（Phase 0/1 ✅）、性能数字（2048/16384）、爪爪法按 -1、格式笔误、4.1 补三层子包架构说明
 
 ## Phase 2：2.5D 地形系统 ✅（2026-08-09）
-- `Airis/game/map.py`：TerrainConfig(Pydantic) + TerrainMap
+- `Airia/game/map.py`：TerrainConfig(Pydantic) + TerrainMap
   - 高度图：fBm value noise（scipy.ndimage.zoom 上采样）
   - 图层：0=地面/1=桥面/2=隧道，LAYER_MAP + LAYER_ALT + ENTRY_MASK
   - Numba 采样：`bilinear_sample` / `get_terrain_z`（数组作参数，字面量 1/2 表示图层）
   - `is_walkable`：坡度 < max_slope_deg（30°）
   - `to_render_data()`：返回 ground/bridge 网格（顶点含颜色）
-- `Airis/utils/coordinates.py`：world↔grid 转换（coordinates 层）
-- `Airis/render/camera.py`：OrbitCamera（Z 向上 ENU，拖拽旋转/滚轮缩放，返回 row-major，写 uniform 时 .T）
-- `Airis/render/gl_widget.py`：地形网格渲染 + 相机交互（detect_framebuffer 保留）
+- `Airia/utils/coordinates.py`：world↔grid 转换（coordinates 层）
+- `Airia/render/camera.py`：OrbitCamera（Z 向上 ENU，拖拽旋转/滚轮缩放，返回 row-major，写 uniform 时 .T）
+- `Airia/render/gl_widget.py`：地形网格渲染 + 相机交互（detect_framebuffer 保留）
 - `tests/test_terrain.py`：9 用例全过；`tests/smoke_gui.py`：渲染一帧存 terrain_preview.png
 
 ## 渲染平滑化（2026-08-10，方案 A）✅
@@ -400,7 +400,7 @@
 
 ## 关键修复记录
 - bilinear_sample 边缘 bug：索引被钳制后 tx/ty 需按钳制后索引重算（曾导致右/下边缘采样为 0）
-- 导入路径已统一为 `Airis.` 前缀绝对导入（main.py 移除 sys.path hack）
+- 导入路径已统一为 `Airia.` 前缀绝对导入（main.py 移除 sys.path hack）
 - **moderngl+PySide6 全黑修复（重要，2026-08-09）**：
   - 症状：QOpenGLWidget 渲染全黑，连背景都读不到；`ctx.clear()`/`ctx.fbo`/`ctx.screen.use()` 都不生效
   - 根因（源码级，venv moderngl/__init__.py）：`ctx.clear()` 用 C 层 `self.mglo.fbo`（create_context 时缓存），Python 层 `ctx.fbo=` 只设属性不同步 C 层/GL 绑定；`ctx.clear()` 会 bind 到缓存 fbo(0) 并清默认缓冲，`vao.render()` 画到当前绑定，于是都落到 Qt 的 FBO(1) 之外 → 全黑
@@ -609,7 +609,7 @@
 - 用户拍板：项目仍在测试阶段，UI 设计需可选测试场景 → 生产侧保留几个 factory
 - **`terrain/factory.py`（新建）**：主名 `TerrainFactoryConfig`（战役人工编辑后无独立「地形配置」语义）+ `TerrainFactory`（flat/fbm/default/default_config）
 - **`terrain/__init__.py`**：导出 TerrainFactory / TerrainFactoryConfig
-- **`tests/terrain_factory.py` → re-export 层**：仅 `from Airis.lulilo.terrain.factory import ...`；测试脚本 import 路径不变（兼容）；测试专用复杂地形（悬崖/迷宫）将来在此追加
+- **`tests/terrain_factory.py` → re-export 层**：仅 `from Airia.lulilo.terrain.factory import ...`；测试脚本 import 路径不变（兼容）；测试专用复杂地形（悬崖/迷宫）将来在此追加
 - 测试脚本 TerrainConfig → TerrainFactoryConfig（test_terrain / integration_heightfield / profile_terrain_load / diag_bridge_patch）
 - 验证：217 passed；生产包/模块/re-export 三路导入一致；default/flat/fbm 场景可用
 - **去别名（用户拍板）**：删除 `TerrainConfig = TerrainFactoryConfig` 别名（factory.py / __init__.py / tests re-export 全清），`TerrainConfig` 全项目零残留；217 passed

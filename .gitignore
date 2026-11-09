@@ -26,3 +26,12 @@ story/**/.obsidian/
 *.h5
 *.hdf5
 uv.lock
+.pytest_cache
+
+# 本地缓存 / 外部参考 / 备份（不入库）
+.numba-cache/
+vendor/
+plugins/
+demo/output/
+_backup_*/
+_backup_*.zip

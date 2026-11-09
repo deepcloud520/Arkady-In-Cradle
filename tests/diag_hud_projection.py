@@ -15,13 +15,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np
 from PySide6.QtWidgets import QApplication
 
-from Airis.render.adapter import WorldAdapter
-from Airis.render.picking import project_world
+from Airia.render.adapter import WorldAdapter
+from Airia.render.picking import project_world
 
 
 def main() -> None:
     app = QApplication(sys.argv)
-    from Airis.ui.main_window import MainWindow
+    from Airia.ui.main_window import MainWindow
 
     win = MainWindow()
     cam = win.gl_widget.camera

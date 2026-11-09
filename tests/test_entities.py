@@ -8,7 +8,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from Airis.lulilo.entities.pools import (
+from Airia.lulilo.entities.pools import (
     MAX_ARMOR,
     MAX_BOXES,
     MAX_FORMATIONS,

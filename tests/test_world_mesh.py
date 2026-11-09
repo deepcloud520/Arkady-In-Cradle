@@ -17,20 +17,20 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from Airis.lulilo.movement.integrate import (
+from Airia.lulilo.movement.integrate import (
     _z_bilinear_flat,
     integrate_armor_movement_3d,
     resolve_mesh_ids,
 )
-from Airis.lulilo.terrain.dual_contour import DualContourBuilder
-from Airis.lulilo.terrain.heightfield import (
+from Airia.lulilo.terrain.dual_contour import DualContourBuilder
+from Airia.lulilo.terrain.heightfield import (
     MAT_BRIDGE,
     MAT_BUILDING,
     MAT_TERRAIN,
     MAT_TUNNEL,
     Heightfield,
 )
-from Airis.lulilo.terrain.world_mesh import (
+from Airia.lulilo.terrain.world_mesh import (
     WorldMesh,
     WorldMeshBuilder,
     WorldPatch,
@@ -119,7 +119,7 @@ class TestWorldMeshBuilder:
         assert bridge[0].patch_id in mesh.walkable_patches
 
     def test_fbm_terrain_build(self):
-        from Airis.lulilo.terrain.factory import TerrainFactory, TerrainFactoryConfig
+        from Airia.lulilo.terrain.factory import TerrainFactory, TerrainFactoryConfig
 
         terrain = TerrainFactory.fbm(
             TerrainFactoryConfig(width=64, height=64)
@@ -408,7 +408,7 @@ class TestPatchSamplingE1:
 
 class TestTerrainMapIntegration:
     def test_world_mesh_property(self):
-        from Airis.lulilo.terrain.map import TerrainMap
+        from Airia.lulilo.terrain.map import TerrainMap
 
         hf = make_hf_with_bridge(12, 12)
         tm = TerrainMap(hf)

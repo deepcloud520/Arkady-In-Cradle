@@ -10,18 +10,18 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from Airis.lulilo.entities.pools import (
+from Airia.lulilo.entities.pools import (
     ProjectilePool,
     ProjectileType,
     ArmorPool,
 )
-from Airis.lulilo.entities.twin import (
+from Airia.lulilo.entities.twin import (
     TWIN_KIND_ARMOR,
     TwinPool,
     TwinStatus,
 )
-from Airis.lulilo.simulation.air_ai import LoiterRecon
-from Airis.lulilo.simulation.twin_engine import TwinEngine
+from Airia.lulilo.simulation.air_ai import LoiterRecon
+from Airia.lulilo.simulation.twin_engine import TwinEngine
 
 
 class _Loop:

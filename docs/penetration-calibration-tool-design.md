@@ -112,7 +112,7 @@ python tools/penetration_calibrate.py compare    --ammos m829a3,3bm42,57mm_apfsd
 
 ## 七、不做什么
 
-- 不改游戏运行时热路径（工具只读内核，不进 `Airis/lulilo`）。
+- 不改游戏运行时热路径（工具只读内核，不进 `Airia/lulilo`）。
 - 不做 GUI / 数据库 / 网络。
 - 不新增物理模型（跳飞判据、锚、L/D 效应等仍属主设计文档，工具仅调用其内核）。
 

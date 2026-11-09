@@ -18,7 +18,7 @@ from PySide6.QtCore import QTimer
 from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QApplication
 
-from Airis.ui.main_window import MainWindow
+from Airia.ui.main_window import MainWindow
 from _output import clean_output_dir, output_path
 
 # 阵营标记目标色（0~255，含抗锯齿过渡容忍）

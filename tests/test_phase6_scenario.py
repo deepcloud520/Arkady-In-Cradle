@@ -10,9 +10,9 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from Airis.lulilo.simulation.ai import UnitRole
-from Airis.lulilo.simulation.commands import Command, CommandType
-from Airis.lulilo.simulation.scenario import (
+from Airia.lulilo.simulation.ai import UnitRole
+from Airia.lulilo.simulation.commands import Command, CommandType
+from Airia.lulilo.simulation.scenario import (
     FormationSpec,
     ScenarioConfig,
     UnitSpec,

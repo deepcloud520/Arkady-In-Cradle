@@ -10,9 +10,9 @@ import numpy as np
 import pytest
 from PySide6.QtCore import Qt
 
-from Airis.render.adapter import WorldAdapter
-from Airis.render.effects import EffectLayer
-from Airis.ui.controls import ControlMap
+from Airia.render.adapter import WorldAdapter
+from Airia.render.effects import EffectLayer
+from Airia.ui.controls import ControlMap
 
 
 # ---------------------------------------------------------------------------
@@ -190,8 +190,8 @@ def test_speed_at_none_fallback():
 
 
 def test_from_snapshot_armor_speed():
-    from Airis.lulilo.entities.pools import ArmorPool
-    from Airis.lulilo.simulation.state import SimulationState
+    from Airia.lulilo.entities.pools import ArmorPool
+    from Airia.lulilo.simulation.state import SimulationState
 
     state = SimulationState()
     armor = ArmorPool(capacity=8)
@@ -217,7 +217,7 @@ def test_from_snapshot_armor_speed():
 
 
 def test_font_atlas_basic():
-    from Airis.render.hud.text import FontAtlas
+    from Airia.render.hud.text import FontAtlas
 
     atlas = FontAtlas(size=32)
     if not atlas.available:
@@ -237,7 +237,7 @@ def test_font_atlas_basic():
 
 
 def test_font_atlas_missing_glyph():
-    from Airis.render.hud.text import FontAtlas
+    from Airia.render.hud.text import FontAtlas
 
     atlas = FontAtlas(size=32)
     if not atlas.available:

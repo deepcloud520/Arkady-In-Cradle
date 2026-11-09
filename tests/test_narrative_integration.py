@@ -17,12 +17,12 @@ from pathlib import Path
 
 import pytest
 
-from Airis.lulilo.simulation.commands import CommandQueue, CommandType
-from Airis.lulilo.simulation.loop import SimulationEvent, SimulationLoop
-from Airis.lulilo.simulation.state import SimulationState
+from Airia.lulilo.simulation.commands import CommandQueue, CommandType
+from Airia.lulilo.simulation.loop import SimulationEvent, SimulationLoop
+from Airia.lulilo.simulation.state import SimulationState
 
-from Airis.narrative.engine import NarrativeEngine
-from Airis.narrative.recorder import CombatEventRecorder
+from Airia.narrative.engine import NarrativeEngine
+from Airia.narrative.recorder import CombatEventRecorder
 
 # 示例数据目录（项目根 story/）
 STORY_DIR = Path(__file__).resolve().parents[1] / "story"
@@ -35,6 +35,7 @@ def story_files_exist() -> None:
     """前置：示例 YAML 存在（Phase 4c 交付物）。"""
     assert (DIALOGUES_DIR / "prologue.yaml").exists()
     assert (DIALOGUES_DIR / "first_blood.yaml").exists()
+    assert (DIALOGUES_DIR / "time_warning.yaml").exists()
     assert (TRIGGERS_DIR / "chapter1.yaml").exists()
 
 
@@ -72,7 +73,7 @@ class TestIntegratedFlow:
     def test_full_flow_with_example_data(self, story_files_exist: None) -> None:
         """端到端：开场对话 → 玩家选择 → 指令 → 战斗 → 首次击毁对话 → 简报。"""
         loop, engine, recorder = make_world()
-        assert engine.load_dialogues(DIALOGUES_DIR) == 2
+        assert engine.load_dialogues(DIALOGUES_DIR) == 3
         assert engine.load_triggers(TRIGGERS_DIR) == 3
 
         # ---- 第 1 帧：首帧触发开场对话（on_first_tick → prologue_001）----
@@ -89,7 +90,9 @@ class TestIntegratedFlow:
         engine.advance_dialogue(None)
         choice = engine._build_state().active_dialogue
         assert choice is not None
-        assert len(choice.options) == 3  # 固守 / 出击 / （等情报-条件选项）
+        # 无 has_scout_report → 条件选项「等待更多侦察情报」被引擎过滤（docs §2.3）
+        assert len(choice.options) == 2  # 固守 / 出击
+        assert choice.option_indices == [0, 1]
 
         # ---- 玩家选择「固守」→ Command 入队 ----
         engine.on_player_choice("prologue_001", 0)
@@ -154,6 +157,34 @@ class TestIntegratedFlow:
         assert briefing.outcome == "stalemate"  # 1/2 敌未消灭
         assert any("首次击毁" in h for h in briefing.highlights)
         assert "战斗简报" in briefing.to_text()
+
+        recorder.close()
+
+    def test_conditional_option_visible_with_scenario_flag(
+        self, story_files_exist: None
+    ) -> None:
+        """场景标志位 → 条件选项可见（docs §2.3；2026-09-11 起引擎侧过滤）。
+
+        `main_window._load_story` 对含无人机侦察的场景设置 `has_scout_report`；
+        此处复现该装配顺序：先 set_flag，再驱动首帧触发器。
+        """
+        loop, engine, recorder = make_world()
+        engine.load_dialogues(DIALOGUES_DIR)
+        engine.load_triggers(TRIGGERS_DIR)
+        engine.set_flag("has_scout_report")  # 场景初始情报（与 prologue 文案同源）
+
+        loop.step(1.0)
+        pump_events(loop, engine)
+        engine.advance_dialogue(None)
+        choice = engine._build_state().active_dialogue
+        assert choice is not None
+        assert len(choice.options) == 3
+        assert choice.option_indices == [0, 1, 2]
+
+        # 选「等待更多侦察情报」（可见索引 2 = 原始索引 2）→ 无指令 + cautious_commander
+        engine.on_player_choice("prologue_001", 2)
+        assert len(loop.commands.drain()) == 0
+        assert engine.has_flag("cautious_commander")
 
         recorder.close()
 

@@ -15,7 +15,7 @@ def main() -> None:
     print(f"[工厂路径] TerrainFactory.default() : {t1 - t0:.3f}s")
 
     # 1.1 fBm 高度图单独计时
-    from Airis.lulilo.terrain.heightmap import generate_fbm
+    from Airia.lulilo.terrain.heightmap import generate_fbm
 
     cfg = TerrainFactoryConfig()
     t0 = time.perf_counter()
@@ -30,7 +30,7 @@ def main() -> None:
     print(f"[main 路径] to_render_data()      : {t1 - t0:.3f}s (顶点 {len(rd['ground_vertices']) + len(rd['bridge_vertices'])})")
 
     # 3. navmesh 烘焙（main.py 当前并不调用，仅作对比）
-    from Airis.lulilo.navmesh._baker import Baker
+    from Airia.lulilo.navmesh._baker import Baker
 
     t0 = time.perf_counter()
     ng = Baker(tm.heightfield).bake()

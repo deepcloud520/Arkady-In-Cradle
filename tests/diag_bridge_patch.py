@@ -1,8 +1,8 @@
 """临时诊断：检查桥顶面 patch 结构与每格桥面覆盖（定位顶面空缺）。运行后删除。"""
 from __future__ import annotations
 
-from Airis.lulilo.terrain.heightfield import MAT_BRIDGE
-from Airis.lulilo.terrain.surface_mesh import SurfaceMeshBuilder
+from Airia.lulilo.terrain.heightfield import MAT_BRIDGE
+from Airia.lulilo.terrain.surface_mesh import SurfaceMeshBuilder
 from tests.terrain_factory import TerrainFactory, TerrainFactoryConfig
 
 

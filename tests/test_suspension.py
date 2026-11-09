@@ -18,17 +18,17 @@ import math
 import numpy as np
 import pytest
 
-from Airis.lulilo.entities.pools import ArmorPool, BoxPool
-from Airis.lulilo.movement.integrate import (
+from Airia.lulilo.entities.pools import ArmorPool, BoxPool
+from Airia.lulilo.movement.integrate import (
     build_armor_movement_hook,
     resolve_contact_mesh_ids,
     solve_suspension,
 )
-from Airis.lulilo.simulation.loop import SimulationLoop
-from Airis.lulilo.simulation.state import SimulationState
-from Airis.lulilo.terrain.dual_contour import DualContourBuilder
-from Airis.lulilo.terrain.heightfield import MAT_BRIDGE, Heightfield
-from Airis.lulilo.terrain.world_mesh import flatten_world_mesh
+from Airia.lulilo.simulation.loop import SimulationLoop
+from Airia.lulilo.simulation.state import SimulationState
+from Airia.lulilo.terrain.dual_contour import DualContourBuilder
+from Airia.lulilo.terrain.heightfield import MAT_BRIDGE, Heightfield
+from Airia.lulilo.terrain.world_mesh import flatten_world_mesh
 
 
 # ---------------------------------------------------------------------------

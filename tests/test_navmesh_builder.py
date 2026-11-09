@@ -19,15 +19,15 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from Airis.lulilo.movement.nav import navgraph_astar
-from Airis.lulilo.movement.pathfinding import GraphPathfinder, funnel_graph
-from Airis.lulilo.terrain.heightfield import (
+from Airia.lulilo.movement.nav import navgraph_astar
+from Airia.lulilo.movement.pathfinding import GraphPathfinder, funnel_graph
+from Airia.lulilo.terrain.heightfield import (
     MAT_BRIDGE,
     MAT_BUILDING,
     MAT_TERRAIN,
     Heightfield,
 )
-from Airis.lulilo.terrain.navmesh_builder import (
+from Airia.lulilo.terrain.navmesh_builder import (
     NavGraph,
     NavMeshBuilder,
     NavTriangle,

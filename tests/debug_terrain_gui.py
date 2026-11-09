@@ -14,7 +14,7 @@ from PIL import Image
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
-from Airis.render.gl_widget import GLWidget
+from Airia.render.gl_widget import GLWidget
 from _output import clean_output_dir, output_path
 
 

@@ -13,10 +13,10 @@ import math
 import numpy as np
 import pytest
 
-from Airis.lulilo.combat.damage_submission import DamageSubmissionPool
-from Airis.lulilo.combat.engagement import FiringControl
-from Airis.lulilo.combat.guidance import MissileControlRegistry
-from Airis.lulilo.combat.weapons import (
+from Airia.lulilo.combat.damage_submission import DamageSubmissionPool
+from Airia.lulilo.combat.engagement import FiringControl
+from Airia.lulilo.combat.guidance import MissileControlRegistry
+from Airia.lulilo.combat.weapons import (
     AmmoConfig,
     AmmoType,
     GuidanceType,
@@ -26,8 +26,8 @@ from Airis.lulilo.combat.weapons import (
     WeaponRegistry,
     WeaponSystem,
 )
-from Airis.lulilo.core.rng import RNGManager
-from Airis.lulilo.entities.pools import (
+from Airia.lulilo.core.rng import RNGManager
+from Airia.lulilo.entities.pools import (
     AircraftPool,
     AircraftState,
     ArmorPool,
@@ -36,8 +36,8 @@ from Airis.lulilo.entities.pools import (
     EmitterPool,
     ProjectilePool,
 )
-from Airis.lulilo.simulation.ai import RWRDetector
-from Airis.lulilo.simulation.air_ai import AirDefenseController
+from Airia.lulilo.simulation.ai import RWRDetector
+from Airia.lulilo.simulation.air_ai import AirDefenseController
 
 from tests.test_phase7_aam import _air_registry
 
@@ -105,8 +105,8 @@ class TestAirDefense:
     """SAM 防空激活（docs §十）。"""
 
     def test_sam_launch_and_hit_aircraft(self) -> None:
-        from Airis.lulilo.combat.engagement import UnitCombatConfig
-        from Airis.lulilo.entities.pools import PartType
+        from Airia.lulilo.combat.engagement import UnitCombatConfig
+        from Airia.lulilo.entities.pools import PartType
 
         aircraft, armor, firing, proj, emitters = _rig()
         # 防空单位配置 + 发射架（TURRET 箱：can_fire 语义）
@@ -141,8 +141,8 @@ class TestAirDefense:
         assert hit, f"SAM 未命中飞机（health={aircraft.health[foe]}）"
 
     def test_sam_no_friendly_fire(self) -> None:
-        from Airis.lulilo.combat.engagement import UnitCombatConfig
-        from Airis.lulilo.entities.pools import PartType
+        from Airia.lulilo.combat.engagement import UnitCombatConfig
+        from Airia.lulilo.entities.pools import PartType
 
         aircraft, armor, firing, proj, emitters = _rig()
         aa = armor.spawn(0.0, 0.0, 0.0, side=1, role=3)
@@ -160,8 +160,8 @@ class TestAirDefense:
         assert proj.active_count == 0, "不应打己方飞机"
 
     def test_sam_out_of_range(self) -> None:
-        from Airis.lulilo.combat.engagement import UnitCombatConfig
-        from Airis.lulilo.entities.pools import PartType
+        from Airia.lulilo.combat.engagement import UnitCombatConfig
+        from Airia.lulilo.entities.pools import PartType
 
         aircraft, armor, firing, proj, emitters = _rig()
         aa = armor.spawn(0.0, 0.0, 0.0, side=1, role=3)
@@ -220,9 +220,9 @@ class TestFlareDecoy:
     """热焰诱饵诱骗红外导引头（docs §11.3：_find_ir_hot 选最热源）。"""
 
     def test_find_ir_hot_prefers_flare(self) -> None:
-        from Airis.lulilo.combat.engagement import FiringControl
+        from Airia.lulilo.combat.engagement import FiringControl
 
-        from Airis.lulilo.combat.weapons import WeaponSystem
+        from Airia.lulilo.combat.weapons import WeaponSystem
 
         aircraft, armor, firing, proj, emitters = _rig()
         me = aircraft.spawn(0.0, 0.0, 3000.0, side=1)
@@ -239,7 +239,7 @@ class TestFlareDecoy:
 
     def test_flare_outshines_engine(self) -> None:
         """flare cur_power 瞬时远高于尾焰 → 诱骗成功（导引头目标=flare）。"""
-        from Airis.lulilo.combat.engagement import FiringControl
+        from Airia.lulilo.combat.engagement import FiringControl
 
         aircraft, armor, firing, proj, emitters = _rig()
         foe = aircraft.spawn(2000.0, 0.0, 3000.0, side=0)

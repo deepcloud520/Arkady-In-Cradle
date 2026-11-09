@@ -10,8 +10,8 @@ import logging
 import numpy as np
 import pytest
 
-from Airis.lulilo.core.logging import get_logger
-from Airis.lulilo.core.rng import RNGManager
+from Airia.lulilo.core.logging import get_logger
+from Airia.lulilo.core.rng import RNGManager
 
 
 # ---------------------------------------------------------------------------

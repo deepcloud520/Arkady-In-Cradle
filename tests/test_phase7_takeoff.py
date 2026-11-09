@@ -13,10 +13,10 @@ import math
 import numpy as np
 import pytest
 
-from Airis.lulilo.entities.pools import AircraftPool, AircraftState
-from Airis.lulilo.movement.aerodynamics import AircraftAero, integrate_aircraft_motion
-from Airis.lulilo.movement.flight_control import FlightControl
-from Airis.lulilo.simulation.air_ai import AirbaseConfig, AirfieldOps
+from Airia.lulilo.entities.pools import AircraftPool, AircraftState
+from Airia.lulilo.movement.aerodynamics import AircraftAero, integrate_aircraft_motion
+from Airia.lulilo.movement.flight_control import FlightControl
+from Airia.lulilo.simulation.air_ai import AirbaseConfig, AirfieldOps
 
 G = 9.81
 DT = 0.1

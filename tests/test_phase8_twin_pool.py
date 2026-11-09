@@ -10,19 +10,19 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from Airis.lulilo.entities.pools import MAX_ARMOR, AircraftPool, ArmorPool
-from Airis.lulilo.entities.twin import (
+from Airia.lulilo.entities.pools import MAX_ARMOR, AircraftPool, ArmorPool
+from Airia.lulilo.entities.twin import (
     MAX_TWIN,
     TWIN_KIND_AIRCRAFT,
     TWIN_KIND_ARMOR,
     TwinPool,
     TwinStatus,
 )
-from Airis.lulilo.simulation.serialization import (
+from Airia.lulilo.simulation.serialization import (
     deserialize_battlefield,
     serialize_battlefield,
 )
-from Airis.lulilo.simulation.state import SimulationState
+from Airia.lulilo.simulation.state import SimulationState
 
 
 class TestSlotMapping:

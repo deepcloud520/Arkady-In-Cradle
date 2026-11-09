@@ -40,7 +40,7 @@ core → lulilo → terrain.heightfield
 | 读 | `solid_at(gx, gy, z) -> bool` | 热路径 |
 | 内 | `span_count(gx, gy) -> int` | 调试/测试 |
 
-状态：**已实现**（`Airis/lulilo/terrain/heightfield.py`），含 Numba 热路径 + 单测 `tests/test_heightfield.py`。
+状态：**已实现**（`Airia/lulilo/terrain/heightfield.py`），含 Numba 热路径 + 单测 `tests/test_heightfield.py`。
 
 ### 4.2 `terrain/surface.py` —— `SurfaceExtractor`
 | 方法 | 签名 | 说明 |

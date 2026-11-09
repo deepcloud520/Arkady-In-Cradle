@@ -12,24 +12,24 @@ import math
 import numpy as np
 import pytest
 
-from Airis.lulilo.combat.engagement import FiringControl, UnitCombatConfig, solve_ballistic
-from Airis.lulilo.core.rng import RNGManager
-from Airis.lulilo.entities.pools import (
+from Airia.lulilo.combat.engagement import FiringControl, UnitCombatConfig, solve_ballistic
+from Airia.lulilo.core.rng import RNGManager
+from Airia.lulilo.entities.pools import (
     ArmorPool,
     BoxPool,
     FormationAIPool,
     PartType,
     ProjectilePool,
 )
-from Airis.lulilo.logistics.ammo import AmmoManager
-from Airis.lulilo.simulation.ai import (
+from Airia.lulilo.logistics.ammo import AmmoManager
+from Airia.lulilo.simulation.ai import (
     ArtilleryAI,
     FormationAI,
     UnitRole,
 )
-from Airis.lulilo.simulation.commands import Command, CommandType
-from Airis.lulilo.simulation.loop import EventBus, SimulationLoop
-from Airis.lulilo.simulation.state import SimulationState
+from Airia.lulilo.simulation.commands import Command, CommandType
+from Airia.lulilo.simulation.loop import EventBus, SimulationLoop
+from Airia.lulilo.simulation.state import SimulationState
 
 # 简化碰撞箱（车体 + 炮塔，够开火链 + 部位毁伤用）
 _SIMPLE_PARTS = [

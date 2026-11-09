@@ -8,8 +8,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from Airis.lulilo.entities.pools import MAX_ARMOR, MAX_PROJ
-from Airis.lulilo.movement.integrate import (
+from Airia.lulilo.entities.pools import MAX_ARMOR, MAX_PROJ
+from Airia.lulilo.movement.integrate import (
     compute_speed,
     integrate_armor_movement,
     integrate_projectile_movement,

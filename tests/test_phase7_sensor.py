@@ -12,10 +12,10 @@ import math
 import numpy as np
 import pytest
 
-from Airis.lulilo.core.rng import RNGManager
-from Airis.lulilo.detection.sensors import RCS_BOMBER, RCS_FIGHTER
-from Airis.lulilo.entities.pools import AircraftPool, AircraftState, ArmorPool
-from Airis.lulilo.simulation.air_ai import (
+from Airia.lulilo.core.rng import RNGManager
+from Airia.lulilo.detection.sensors import RCS_BOMBER, RCS_FIGHTER
+from Airia.lulilo.entities.pools import AircraftPool, AircraftState, ArmorPool
+from Airia.lulilo.simulation.air_ai import (
     TGT_AIR,
     TGT_GROUND,
     gather_air_contacts,
@@ -170,7 +170,7 @@ class TestEmitterBind:
     """飞机 emitter 绑定（步骤④与步骤①接缝的传感器侧验证）。"""
 
     def test_radar_emitter_tracks_aircraft(self) -> None:
-        from Airis.lulilo.entities.pools import EmitterPool, ProjectilePool
+        from Airia.lulilo.entities.pools import EmitterPool, ProjectilePool
 
         a, armor, _ = _rig()
         air_idx = a.spawn(0.0, 0.0, 3000.0, side=1)

@@ -14,11 +14,11 @@ import time
 
 import numpy as np
 
-from Airis.lulilo.combat.collision import CollisionDetector
-from Airis.lulilo.combat.damage import ArmorType
-from Airis.lulilo.combat.engagement import FiringControl, UnitCombatConfig
-from Airis.lulilo.core.rng import RNGManager
-from Airis.lulilo.entities.pools import (
+from Airia.lulilo.combat.collision import CollisionDetector
+from Airia.lulilo.combat.damage import ArmorType
+from Airia.lulilo.combat.engagement import FiringControl, UnitCombatConfig
+from Airia.lulilo.core.rng import RNGManager
+from Airia.lulilo.entities.pools import (
     MAX_ARMOR,
     MAX_BOXES,
     MAX_PROJ,
@@ -27,9 +27,9 @@ from Airis.lulilo.entities.pools import (
     PartType,
     ProjectilePool,
 )
-from Airis.lulilo.logistics.ammo import AmmoManager
-from Airis.lulilo.logistics.fuel import FuelManager
-from Airis.lulilo.movement.integrate import integrate_projectile_movement
+from Airia.lulilo.logistics.ammo import AmmoManager
+from Airia.lulilo.logistics.fuel import FuelManager
+from Airia.lulilo.movement.integrate import integrate_projectile_movement
 
 
 # ---------------------------------------------------------------------------

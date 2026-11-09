@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 
-from Airis.render.camera import OrbitCamera
+from Airia.render.camera import OrbitCamera
 from tests.terrain_factory import TerrainFactory
 
 

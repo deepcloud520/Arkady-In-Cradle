@@ -17,13 +17,13 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from Airis.lulilo.terrain.dual_contour import DualContourBuilder, _bilinear_z
-from Airis.lulilo.terrain.heightfield import (
+from Airia.lulilo.terrain.dual_contour import DualContourBuilder, _bilinear_z
+from Airia.lulilo.terrain.heightfield import (
     MAT_BRIDGE,
     MAT_TERRAIN,
     Heightfield,
 )
-from Airis.lulilo.terrain.world_mesh import (
+from Airia.lulilo.terrain.world_mesh import (
     FACE_BOTTOM,
     FACE_NX,
     FACE_NY,
@@ -201,7 +201,7 @@ class TestIntegration:
         assert mesh.patches[pid_top].mat == MAT_BRIDGE
 
     def test_terrain_map_dual_builder(self):
-        from Airis.lulilo.terrain.map import TerrainMap
+        from Airia.lulilo.terrain.map import TerrainMap
 
         tm = TerrainMap(
             make_hf_bridge(),

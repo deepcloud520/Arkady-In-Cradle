@@ -14,16 +14,16 @@ import time
 
 import numpy as np
 
-from Airis.lulilo.combat.guidance import GuidanceStage
-from Airis.lulilo.combat.sfm import SfmScanner, scan_armor_detect
-from Airis.lulilo.entities.pools import (
+from Airia.lulilo.combat.guidance import GuidanceStage
+from Airia.lulilo.combat.sfm import SfmScanner, scan_armor_detect
+from Airia.lulilo.entities.pools import (
     MAX_ARMOR,
     ArmorPool,
     EmitterPool,
     ProjectilePool,
     ProjectileType,
 )
-from Airis.lulilo.entities.pools import EmitterBand
+from Airia.lulilo.entities.pools import EmitterBand
 from tests.test_guidance_pipeline import make_guided_registry
 
 N_SFM = 32

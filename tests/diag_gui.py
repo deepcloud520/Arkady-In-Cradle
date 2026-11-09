@@ -19,7 +19,7 @@ logging.basicConfig(
 from PySide6.QtCore import QTimer  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
-from Airis.ui.main_window import MainWindow  # noqa: E402
+from Airia.ui.main_window import MainWindow  # noqa: E402
 
 
 def main() -> int:

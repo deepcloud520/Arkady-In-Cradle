@@ -15,10 +15,10 @@ import time
 
 import numpy as np
 
-from Airis.lulilo.entities.pools import MAX_AIRCRAFT, MAX_ARMOR, AircraftPool, ArmorPool
-from Airis.lulilo.entities.twin import TWIN_KIND_ARMOR, TWIN_KIND_AIRCRAFT, TwinPool
-from Airis.lulilo.simulation.datalink import DataLinkNetwork
-from Airis.lulilo.simulation.twin_engine import TwinEngine
+from Airia.lulilo.entities.pools import MAX_AIRCRAFT, MAX_ARMOR, AircraftPool, ArmorPool
+from Airia.lulilo.entities.twin import TWIN_KIND_ARMOR, TWIN_KIND_AIRCRAFT, TwinPool
+from Airia.lulilo.simulation.datalink import DataLinkNetwork
+from Airia.lulilo.simulation.twin_engine import TwinEngine
 
 
 def _ms(elapsed_s: float, iterations: int) -> float:
@@ -103,7 +103,7 @@ def benchmark_datalink_build() -> float:
 
 def benchmark_full_impact() -> float:
     """全帧影响：孪生 + 数据链 + 接触生成（docs §十一 全帧预算）。"""
-    from Airis.lulilo.entities.pools import FormationAIPool
+    from Airia.lulilo.entities.pools import FormationAIPool
 
     twin = TwinPool()
     armor = ArmorPool(capacity=128)

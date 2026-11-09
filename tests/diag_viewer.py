@@ -33,8 +33,8 @@ from PySide6.QtGui import QKeyEvent, QMouseEvent, QSurfaceFormat, QWheelEvent
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtWidgets import QApplication, QMainWindow
 
-from Airis.lulilo.terrain.map import TerrainMap
-from Airis.render.camera import OrbitCamera
+from Airia.lulilo.terrain.map import TerrainMap
+from Airia.render.camera import OrbitCamera
 from tests.terrain_factory import TerrainFactory
 
 # 与生产 gl_widget.py 相同的着色器（诊断不引入新变量）
