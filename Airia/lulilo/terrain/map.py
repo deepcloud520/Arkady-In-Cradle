@@ -41,11 +41,14 @@ class TerrainMap:
         heightfield: Heightfield,
         continuous_ground: np.ndarray | None = None,
         world_mesh_builder: type[WorldMeshBuilder] | None = None,
+        frame: Any | None = None,
     ) -> None:
         # Heightfield 存储（逻辑/碰撞/寻路唯一数据源）
         self.heightfield = heightfield
         # 连续地面高度场（渲染层去量化用，可选；缺省时 SurfaceExtractor 回退量化层）
         self.continuous_ground = continuous_ground
+        # 地球曲率帧（docs/curvature-3d-worldmesh-design.md；None = 平面世界）
+        self.frame = frame
         # WorldMesh 构建器（Phase A=WorldMeshBuilder 顶面 / Phase B=DualContourBuilder 完整3D）
         self._world_mesh_builder = world_mesh_builder or WorldMeshBuilder
         # SurfaceMesh 懒加载（渲染结构层共用，首次访问时构建）
@@ -83,7 +86,9 @@ class TerrainMap:
         """
         if self._world_mesh is None:
             self._world_mesh = self._world_mesh_builder(
-                self.heightfield, continuous_ground=self.continuous_ground
+                self.heightfield,
+                continuous_ground=self.continuous_ground,
+                frame=self.frame,
             ).build()
         return self._world_mesh
 
@@ -124,6 +129,7 @@ class TerrainMap:
                                         # 逻辑 WorldMesh 必须含地面面片，见
                                         # docs/worldmesh-ground-patch-policy.md（红线）
                 build_adjacency=False,  # 渲染不寻路，跳过邻接（8s → 毫秒级）
+                frame=self.frame,
             ).build()
         return self._render_world_mesh
 

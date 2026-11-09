@@ -25,6 +25,7 @@ import logging
 
 import numpy as np
 
+from Airia.lulilo.coordinates.frame import LocalFrame, bend_patches
 from Airia.lulilo.terrain.heightfield import (
     MAT_TERRAIN,
     MAX_SPANS,
@@ -70,6 +71,7 @@ class DualContourBuilder:
         gap: int = 1,
         include_ground: bool = True,
         build_adjacency: bool = True,
+        frame: LocalFrame | None = None,
     ) -> None:
         self.hf = hf
         self.continuous_ground = continuous_ground
@@ -86,6 +88,8 @@ class DualContourBuilder:
         # build_adjacency=False：渲染不寻路，跳过邻接构建。
         self.include_ground = include_ground
         self.build_adjacency = build_adjacency
+        # 地球曲率帧（None = 平面世界，保持旧测试基线）
+        self.frame = frame
 
     # ------------------------------------------------------------------
     # 公开 API
@@ -113,6 +117,9 @@ class DualContourBuilder:
         # 4. 地面平滑
         if self.continuous_ground is not None:
             self._smooth_ground(patches)
+
+        # 4b. 地球曲率（A 方案：WM 顶点减 d²/2R；spans 保持平面）
+        bend_patches(patches, self.frame)
 
         # 5. walkable 筛选
         self._mark_walkable(patches)

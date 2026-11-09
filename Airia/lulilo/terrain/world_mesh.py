@@ -27,6 +27,7 @@ from typing import Any
 
 import numpy as np
 
+from Airia.lulilo.coordinates.frame import LocalFrame, bend_patches
 from Airia.lulilo.terrain.heightfield import (
     MAT_TERRAIN,
     _MAT,
@@ -346,6 +347,7 @@ class WorldMeshBuilder:
         max_climb: float = 2.0,
         min_walkable_area: float = 4.0,
         continuous_ground: np.ndarray | None = None,
+        frame: "LocalFrame | None" = None,
     ) -> None:
         self.hf = hf
         self.max_slope_deg = float(max_slope_deg)
@@ -355,6 +357,8 @@ class WorldMeshBuilder:
         self.ch = float(hf.ch)
         # 统一接口（Phase B DualContourBuilder 使用）；Phase A 顶面不做平滑
         self.continuous_ground = continuous_ground
+        # 地球曲率帧（None = 平面世界）
+        self.frame = frame
 
     # ------------------------------------------------------------------
     # 公开 API
@@ -374,6 +378,9 @@ class WorldMeshBuilder:
 
         # 2. GreedyMesh → 3D 面片
         patches = self._build_patches_3d(groups)
+
+        # 2b. 地球曲率（A 方案：WM 顶点减 d²/2R）
+        bend_patches(patches, self.frame)
 
         # 3. 可走性筛选
         self._filter_walkable(patches)
